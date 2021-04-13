@@ -1,0 +1,31 @@
+<launch>
+
+    <node pkg="nodelet" type="nodelet" name="cloudify_crop"
+          args="standalone depth_image_proc/point_cloud_xyz">
+        <remap from="image_rect" to="/bubblebot/front/depth"/>
+        <remap from="camera_info" to="/bubblebot/front/camera_info"/>
+        <remap from="points" to="/bubblebot/front/points_unfiltered"/>
+    </node>
+
+    <group ns="box_filter">
+        <node pkg="nodelet" type="nodelet" name="cropbox" args="standalone pcl/CropBox" output="screen">
+            <remap from="~input" to="/bubblebot/front/points_unfiltered" />
+            <remap from="~output" to="/bubblebot/front/points" />
+            <rosparam>
+                min_x: -1000
+                max_x: 1000
+                min_y: 0.1
+                max_y: 1000
+                min_z: 0
+                max_z: 9.9
+            </rosparam>
+        </node>
+    </group>
+
+    <node name="octomap" pkg="octomap_server" type="octomap_server_node">
+        <param name="frame_id" value="map"/>
+        <param name="resolution" value=".2"/>
+        <remap from="cloud_in" to="/bubblebot/front/points"/>
+    </node>
+
+ </launch>
