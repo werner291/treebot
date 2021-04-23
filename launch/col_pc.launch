@@ -5,8 +5,9 @@
 
     <rosparam command="load" file="$(find treebot)/config/kinematics.yaml"/>
     <rosparam command="load" file="$(find treebot)/config/planner.yaml"/>
+    <rosparam command="load" file="$(find treebot)/config/controller.yaml"/>
 
-    <include file="$(find treebot)/launch/pointcloud.launch" />
+<!--    <include file="$(find treebot)/launch/pointcloud.launch" />-->
     <!--    <node name="octomap" pkg="octomap_server" type="octomap_server_node">-->
     <!--        <param name="frame_id" value="map"/>-->
     <!--        <param name="resolution" value=".1"/>-->

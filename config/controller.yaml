@@ -1,0 +1,8 @@
+moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
+controller_list:
+  - name: drone_controller
+    action_ns: drone_controller
+    type: MultiDofFollowJointTrajectory
+    default: true
+    joints:
+      - world_joint
