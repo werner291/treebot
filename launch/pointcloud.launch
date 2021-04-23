@@ -1,0 +1,24 @@
+<launch>
+    <node pkg="nodelet" type="nodelet" name="cloudify_crop"
+          args="standalone depth_image_proc/point_cloud_xyzrgb">
+        <remap from="depth_registered/image_rect" to="/drone/front/depth"/>
+        <remap from="rgb/image_rect_color" to="/drone/front/rgb"/>
+        <remap from="rgb/camera_info" to="/drone/front/camera_info"/>
+        <remap from="depth_registered/points" to="/drone/front/points_unfiltered"/>
+    </node>
+
+    <group ns="box_filter">
+        <node pkg="nodelet" type="nodelet" name="cropbox" args="standalone pcl/CropBox" output="screen">
+            <remap from="~input" to="/drone/front/points_unfiltered"/>
+            <remap from="~output" to="/drone/front/points"/>
+            <rosparam>
+                min_x: -1000
+                max_x: 1000
+                min_y: -1000
+                max_y: 1000
+                min_z: 0
+                max_z: 9.9
+            </rosparam>
+        </node>
+    </group>
+</launch>

@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<robot name="bubblebot">
+    <link name="base_link">
+        <visual>
+            <geometry>
+                <cylinder length="0.2" radius="0.2"/>
+            </geometry>
+        </visual>
+        <collision>
+            <geometry>
+                <cylinder length="0.2" radius="0.2"/>
+            </geometry>
+        </collision>
+    </link>
+</robot>

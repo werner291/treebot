@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+
+<robot name="bubblebot">
+
+    <virtual_joint name="world_joint" type="floating" parent_frame="map" child_link="base_link"/>
+
+    <group name="whole_body">
+        <joint name="world_joint"/>
+        <link name="base_link" />
+    </group>
+</robot>
