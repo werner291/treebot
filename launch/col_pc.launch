@@ -3,11 +3,16 @@
     <param name="robot_description" textfile="$(find treebot)/urdf/bot.urdf" />
     <param name="robot_description_semantic" textfile="$(find treebot)/srdf/bot.srdf" />
 
-    <rosparam command="load" file="$(find treebot)/config/kinematics.yaml"/>
-    <rosparam command="load" file="$(find treebot)/config/planner.yaml"/>
-    <rosparam command="load" file="$(find treebot)/config/controller.yaml"/>
-
-<!--    <include file="$(find treebot)/launch/pointcloud.launch" />-->
+    <group ns="treebot_controller">
+        <rosparam command="load" file="$(find treebot)/config/kinematics.yaml"/>
+        <rosparam command="load" file="$(find treebot)/config/planner.yaml"/>
+        <rosparam command="load" file="$(find treebot)/config/controller.yaml"/>
+        <rosparam command="load" file="$(find treebot)/config/sensors.yaml"/>
+        <rosparam command="load" file="$(find treebot)/config/joint_limits.yaml"/>
+    </group>
+    <node name="dummy_joint_publisher" pkg="treebot" type="dummy_joint_messages"/>
+    <include file="$(find treebot)/launch/pointcloud.launch"/>
+    <!--    <include file="$(find treebot)/launch/pointcloud.launch" />-->
     <!--    <node name="octomap" pkg="octomap_server" type="octomap_server_node">-->
     <!--        <param name="frame_id" value="map"/>-->
     <!--        <param name="resolution" value=".1"/>-->

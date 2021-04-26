@@ -86,8 +86,10 @@ void *simMessage(int message, int *auxiliaryData, void *customData, int *replyDa
 
             simAddLog("treebot_controller", sim_verbosity_infos, "Hello world!");
 
-            as = std::make_unique<ActionServer>("drone_controller/drone_controller", false);
-            as->start();
+            if (!as) {
+                as = std::make_unique<ActionServer>("drone_controller/drone_controller", false);
+                as->start();
+            }
 
         } break;
 
@@ -98,7 +100,7 @@ void *simMessage(int message, int *auxiliaryData, void *customData, int *replyDa
                     current_goal = as->acceptNewGoal();
                     trajectory_start_seconds = simGetSimulationTime();
                 }
-                if (as->isPreemptRequested()) {
+                if (current_goal && as->isPreemptRequested()) {
                     current_goal = nullptr;
                     as->setPreempted();
                 }

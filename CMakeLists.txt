@@ -17,6 +17,8 @@ find_package(Eigen3 REQUIRED)
 
 find_package(OpenCV REQUIRED)
 
+find_package(ompl REQUIRED)
+
 catkin_package(
 #  INCLUDE_DIRS include
   LIBRARIES convert_pcl
@@ -34,7 +36,7 @@ include_directories(
 #########################
 
 add_executable(treebot src/treebot.cpp)
-target_link_libraries(treebot ${catkin_LIBRARIES} ${OpenCV_LIBRARIES})
+target_link_libraries(treebot ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} ${OMPL_LIBRARIES})
 
 if(catkin_EXPORTED_LIBRARIES)
     add_dependencies(treebot ${catkin_EXPORTED_LIBRARIES})
