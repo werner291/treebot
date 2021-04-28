@@ -6,6 +6,7 @@
 #include <actionlib_msgs/GoalStatus.h>
 #include <moveit_simple_controller_manager/MultiDofFollowJointTrajectoryAction.h>
 #include <simLib.h>
+#include <Eigen/Geometry>
 
 #ifdef _WIN32
 #define SIM_DLLEXPORT extern "C" __declspec(dllexport)
@@ -93,6 +94,8 @@ void *simMessage(int message, int *auxiliaryData, void *customData, int *replyDa
 
         } break;
 
+
+
         case sim_message_eventcallback_instancepass: {
 
             if (as) {
@@ -110,45 +113,78 @@ void *simMessage(int message, int *auxiliaryData, void *customData, int *replyDa
 
                 if (simGetSimulationState() != sim_simulation_advancing_running) {
                     simAddLog("TreebotController", sim_verbosity_warnings, "Action server has current goal while simulation not running!");
-                }
-                trajectory_msgs::MultiDOFJointTrajectoryPoint point_before;
-                trajectory_msgs::MultiDOFJointTrajectoryPoint point_after;
-                double current_time = simGetSimulationTime() - trajectory_start_seconds;
-                int handle = simGetObjectHandle("Quadricopter_target");
-                bool in_trajectory = false;
-                for (int i = 0; i < current_goal->trajectory.points.size() - 1; i++) {
 
-                    point_before = current_goal->trajectory.points[i];
-                    point_after = current_goal->trajectory.points[i+1];
-                    if (point_before.time_from_start.toSec() <= current_time && point_after.time_from_start.toSec() > current_time) {
-                        in_trajectory = true;
-                        break;
-                    }
-                }
-                if (!in_trajectory) {
-                    as->setSucceeded();
-                    float position[3] = {
-                            static_cast<float>(current_goal->trajectory.points.back().transforms[0].translation.x),
-                            static_cast<float>(current_goal->trajectory.points.back().transforms[0].translation.y),
-                            static_cast<float>(current_goal->trajectory.points.back().transforms[0].translation.z)
-                    };
-                    simSetObjectPosition(handle, -1, position);
+                    as->setAborted();
                     current_goal = nullptr;
-
                 } else {
-                    double t = (current_time - point_before.time_from_start.toSec()) / (point_after.time_from_start.toSec() - point_before.time_from_start.toSec());
+                    trajectory_msgs::MultiDOFJointTrajectoryPoint point_before;
+                    trajectory_msgs::MultiDOFJointTrajectoryPoint point_after;
+                    double current_time = simGetSimulationTime() - trajectory_start_seconds;
+                    int handle = simGetObjectHandle("Quadricopter_target");
+                    bool in_trajectory = false;
+                    for (int i = 0; i < current_goal->trajectory.points.size() - 1; i++) {
 
-                    float position[3] = {
-                            static_cast<float>(point_before.transforms[0].translation.x * (1.0-t) + point_after.transforms[0].translation.x * t),
-                            static_cast<float>(point_before.transforms[0].translation.y * (1.0-t) + point_after.transforms[0].translation.y * t),
-                            static_cast<float>(point_before.transforms[0].translation.z * (1.0-t) + point_after.transforms[0].translation.z * t)
-                    };
+                        point_before = current_goal->trajectory.points[i];
+                        point_after = current_goal->trajectory.points[i + 1];
+                        if (point_before.time_from_start.toSec() <= current_time &&
+                            point_after.time_from_start.toSec() > current_time) {
+                            in_trajectory = true;
+                            break;
+                        }
+                    }
+                    if (!in_trajectory) {
+                        as->setSucceeded();
+                        float position[3] = {
+                                static_cast<float>(current_goal->trajectory.points.back().transforms[0].translation.x),
+                                static_cast<float>(current_goal->trajectory.points.back().transforms[0].translation.y),
+                                static_cast<float>(current_goal->trajectory.points.back().transforms[0].translation.z)
+                        };
+                        simSetObjectPosition(handle, -1, position);
 
-                    simSetObjectPosition(handle, -1, position);
+                        float orientation[4] = {
+                                static_cast<float>(current_goal->trajectory.points.back().transforms[0].rotation.x),
+                                static_cast<float>(current_goal->trajectory.points.back().transforms[0].rotation.y),
+                                static_cast<float>(current_goal->trajectory.points.back().transforms[0].rotation.z),
+                                static_cast<float>(current_goal->trajectory.points.back().transforms[0].rotation.w)
+                        };
+                        simSetObjectQuaternion(handle, -1, orientation);
+
+                        current_goal = nullptr;
+
+                    } else {
+                        double t = (current_time - point_before.time_from_start.toSec()) /
+                                   (point_after.time_from_start.toSec() - point_before.time_from_start.toSec());
+
+                        float position[3] = {
+                                static_cast<float>(point_before.transforms[0].translation.x * (1.0 - t) +
+                                                   point_after.transforms[0].translation.x * t),
+                                static_cast<float>(point_before.transforms[0].translation.y * (1.0 - t) +
+                                                   point_after.transforms[0].translation.y * t),
+                                static_cast<float>(point_before.transforms[0].translation.z * (1.0 - t) +
+                                                   point_after.transforms[0].translation.z * t)
+                        };
+
+                        simSetObjectPosition(handle, -1, position);
+
+                        Eigen::Quaterniond rot_before(point_before.transforms[0].rotation.w, point_before.transforms[0].rotation.x, point_before.transforms[0].rotation.y, point_before.transforms[0].rotation.z);
+                        Eigen::Quaterniond rot_after(point_after.transforms[0].rotation.w, point_after.transforms[0].rotation.x, point_after.transforms[0].rotation.y, point_after.transforms[0].rotation.z);
+
+                        auto rot_interp = rot_before.slerp(t, rot_after);
+
+                        float orientation[4] = {
+                                static_cast<float>(rot_interp.x()),
+                                static_cast<float>(rot_interp.y()),
+                                static_cast<float>(rot_interp.z()),
+                                static_cast<float>(rot_interp.w()),
+                        };
+
+                        simSetObjectQuaternion(handle, -1, orientation);
+
 //                    scm::MultiDofFollowJointTrajectoryFeedback fb;
 //                    fb.header.stamp = ros::Time::now();
 //                    fb.joint_names.push_back("w")
 //                    as->publishFeedback(fb);
+                    }
                 }
 
             }

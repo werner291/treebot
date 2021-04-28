@@ -13,9 +13,17 @@
 #include <moveit_msgs/AttachedCollisionObject.h>
 #include <moveit_msgs/CollisionObject.h>
 #include <moveit_visual_tools/moveit_visual_tools.h>
+#include <moveit/robot_state/conversions.h>
 #include <tf2_ros/transform_listener.h>
 #include <ompl/base/spaces/SE3StateSpace.h>
 #include <ompl/geometric/SimpleSetup.h>
+#include <ompl/geometric/planners/rrt/RRTstar.h>
+#include <ompl/geometric/planners/rrt/RRTConnect.h>
+#include <ompl/geometric/planners/fmt/FMT.h>
+#include <ompl/geometric/planners/bitstar/BITstar.h>
+#include <ompl/base/DiscreteMotionValidator.h>
+
+#include <utility>
 
 static const std::string PLANNING_GROUP = "whole_body";
 
@@ -23,9 +31,51 @@ namespace ob = ompl::base;
 namespace og = ompl::geometric;
 
 planning_interface::PlannerManagerPtr initPlannerManager(const ros::NodeHandle &nh, const moveit::core::RobotModelConstPtr& robot_model);
+
+trajectory_msgs::MultiDOFJointTrajectoryPoint stateToTrajectoryPoint(ob::State *st);
+
 namespace rvt = rviz_visual_tools;
 
+class LookForwardValidator : public ob::MotionValidator {
 
+public:
+    LookForwardValidator(const ompl::base::SpaceInformationPtr &si,
+                         std::shared_ptr<ob::DiscreteMotionValidator> super) : MotionValidator(si), super_(std::move(super)) {}
+
+private:
+    bool checkMotion(const ob::State *s1, const ob::State *s2) const override {
+
+
+
+        auto ss1 = s1->as<ob::SE3StateSpace::StateType>();
+        auto ss2 = s2->as<ob::SE3StateSpace::StateType>();
+
+        Eigen::Vector3d forward_local(0.0,1.0,0.0);
+
+        Eigen::Vector3d delta_linear(ss2->getX() - ss1->getX(), ss2->getY() - ss1->getY(), ss2->getZ() - ss1->getZ());
+        double distance = delta_linear.norm();
+
+        if (distance > std::numeric_limits<double>::epsilon()) {
+            Eigen::Quaterniond rot1(ss1->rotation().w, ss1->rotation().x, ss1->rotation().y, ss1->rotation().z);
+            auto fwd_1 = rot1 * forward_local;
+            Eigen::Quaterniond rot2(ss2->rotation().w, ss2->rotation().x, ss2->rotation().y, ss2->rotation().z);
+            auto fwd_2 = rot2 * forward_local;
+            return super_->checkMotion(s1,s2) && (fwd_1.dot(delta_linear) / distance > 0.8) && (fwd_2.dot(delta_linear) / distance > 0.5);
+        } else {
+            return super_->checkMotion(s1,s2);
+        }
+    }
+
+    bool checkMotion(const ob::State *s1, const ob::State *s2,
+                     std::pair<ob::State *, double> &lastValid) const override {
+        ROS_ERROR("Direction checking not implemented for checkMotion with lastValid");
+        return super_->checkMotion(s1,s2,lastValid);
+    }
+
+    std::shared_ptr<ob::DiscreteMotionValidator> super_;
+
+
+};
 
 int main(int argc, char** argv)
 {
@@ -50,7 +100,10 @@ int main(int argc, char** argv)
     tfBuf->lookupTransform("base_link", "map", ros::Time(0.0), ros::Duration(5.0));
     psm->waitForCurrentRobotState(ros::Time::now(), 5.0);
 
-    moveit_visual_tools::MoveItVisualTools visual_tools("base_link", rvt::RVIZ_MARKER_TOPIC,psm);
+    moveit_visual_tools::MoveItVisualTools visual_tools("map", "markers_viz",psm);
+    visual_tools.deleteAllMarkers();
+
+    visual_tools.trigger();
 
     moveit_msgs::MotionPlanResponse response;
     moveit_msgs::RobotTrajectory rtraj;
@@ -61,11 +114,10 @@ int main(int argc, char** argv)
         auto current_state = ps->getCurrentState();
         auto space = std::make_shared<ob::SE3StateSpace>();
 
-        og::SimpleSetup ss(space);
 
         ob::RealVectorBounds bounds(3);
-        bounds.setLow(-10.0);
-        bounds.setHigh(10.0);
+        bounds.setLow(-5.0);
+        bounds.setHigh(5.0);
         space->setBounds(bounds);
 
         ob::ScopedState<ob::SE3StateSpace> start(space);
@@ -82,9 +134,14 @@ int main(int argc, char** argv)
         goal->setXYZ(-2.0, 2.0, 0.5);
         goal->rotation().setIdentity();
 
-        ss.setStartAndGoalStates(start, goal);
 
-        ss.setStateValidityChecker([&ps, current_state](const ob::State* st) {
+        auto si(std::make_shared<ob::SpaceInformation>(space));
+
+        auto dmv = std::make_shared<ob::DiscreteMotionValidator>(si);
+        auto mv(std::make_shared<LookForwardValidator>(si, dmv));
+        si->setMotionValidator(std::static_pointer_cast<ob::MotionValidator>(mv));
+
+        si->setStateValidityChecker([&ps, current_state](const ob::State* st) {
             moveit::core::RobotState rs(current_state);
 
             double positions[] = {
@@ -96,13 +153,28 @@ int main(int argc, char** argv)
                     st->as<ob::SE3StateSpace::StateType>()->rotation().z,
                     st->as<ob::SE3StateSpace::StateType>()->rotation().w
             };
+
+            if (positions[2] < 0.0) {
+                return false;
+            }
+
+//            ROS_INFO("[%f,%f,%f]", positions[0],positions[1], positions[2]);
+
             rs.setJointPositions("world_joint", positions);
             rs.update();
 
             return ps->isStateValid(rs);
         });
+        si->setup();
 
-        ob::PlannerStatus solved = ss.solve(1.0);
+        auto pdef(std::make_shared<ob::ProblemDefinition>(si));
+        pdef->setStartAndGoalStates(start, goal, 0.5);
+
+//        auto planner(std::make_shared<og::BITstar>(si));
+        auto planner(std::make_shared<og::FMT>(si));
+        planner->setProblemDefinition(pdef);
+
+        ob::PlannerStatus solved = planner->ob::Planner::solve(60.0);
 
         rtraj.multi_dof_joint_trajectory.joint_names.push_back("world_joint");
 
@@ -110,27 +182,30 @@ int main(int argc, char** argv)
         {
             std::cout << "Found solution:" << std::endl;
             // print the path to screen
-            ss.simplifySolution();
-            ss.getSolutionPath().print(std::cout);
+            pdef->getSolutionPath()->print(std::cout);
 
-            for (auto & st : ss.getSolutionPath().getStates()) {
-                moveit::core::RobotState rs(current_state);
+            for (auto & st : pdef->getSolutionPath()->as<og::PathGeometric>()->getStates()) {
 
-                trajectory_msgs::MultiDOFJointTrajectoryPoint mdjtp;
-                geometry_msgs::Transform tf;
+                trajectory_msgs::MultiDOFJointTrajectoryPoint current_point = stateToTrajectoryPoint(st);
 
-                tf.translation.x = st->as<ob::SE3StateSpace::StateType>()->getX();
-                tf.translation.y = st->as<ob::SE3StateSpace::StateType>()->getY();
-                tf.translation.z = st->as<ob::SE3StateSpace::StateType>()->getZ();
+                if (rtraj.multi_dof_joint_trajectory.points.empty()) {
+                    current_point.time_from_start = ros::Duration(0.0);
+                } else {
+                    auto last_point = rtraj.multi_dof_joint_trajectory.points.back();
 
-                tf.rotation.x = st->as<ob::SE3StateSpace::StateType>()->rotation().x;
-                tf.rotation.y = st->as<ob::SE3StateSpace::StateType>()->rotation().y;
-                tf.rotation.z = st->as<ob::SE3StateSpace::StateType>()->rotation().z;
-                tf.rotation.w = st->as<ob::SE3StateSpace::StateType>()->rotation().w;
+                    auto p1 = current_point.transforms[0].translation;
+                    auto p2 = last_point.transforms[0].translation;
 
-                mdjtp.transforms.push_back(tf);
+                    double length = (Eigen::Vector3d(p1.x, p1.y, p1.z) - Eigen::Vector3d(p2.x, p2.y, p2.z)).norm();
+                    double speed = 0.1;
 
-                rtraj.multi_dof_joint_trajectory.points.push_back(mdjtp);
+                    current_point.time_from_start = last_point.time_from_start + ros::Duration(length / speed);
+                }
+
+
+
+
+                rtraj.multi_dof_joint_trajectory.points.push_back(current_point);
             }
         } else {
             ROS_ERROR("OMPL planner error: %s", solved.asString().c_str());
@@ -186,21 +261,30 @@ int main(int argc, char** argv)
 //                     pt.transforms[0].translation.x, pt.transforms[0].translation.y,pt.transforms[0].translation.z,
 //                     pt.transforms[0].rotation.x, pt.transforms[0].rotation.y, pt.transforms[0].rotation.z, pt.transforms[0].rotation.w);
 //        }
+
+
+        moveit_msgs::DisplayTrajectory dt;
+        dt.trajectory.push_back(rtraj);
+
+        moveit_msgs::RobotState robot_state_msg;
+        moveit::core::robotStateToRobotStateMsg(current_state, robot_state_msg);
+
+        moveit_msgs::DisplayTrajectory display_trajectory_msg;
+        display_trajectory_msg.model_id = psm->getRobotModel()->getName();
+        display_trajectory_msg.trajectory.resize(1);
+        display_trajectory_msg.trajectory[0] = rtraj;
+        display_trajectory_msg.trajectory_start = robot_state_msg;
+
+        visual_tools.publishTrajectoryPath(display_trajectory_msg);
+        visual_tools.trigger();
     }
-//
-
-
-    const double *positions = psm->getStateMonitor()->getCurrentState()->getJointPositions("world_joint");
-
-    auto gltf = psm->getStateMonitor()->getCurrentState()->getGlobalLinkTransform("base_link");
-
-    ROS_INFO("[%f,%f,%f,%f,%f,%f,%f]", positions[0], positions[1], positions[2], positions[3], positions[4], positions[5], positions[6]);
-    ROS_INFO("[%f,%f,%f,%f,%f,%f,%f]", gltf.translation().x(), gltf.translation().y(), gltf.translation().z(), gltf.rotation().data()[0], gltf.rotation().data()[1], gltf.rotation().data()[2], gltf.rotation().data()[3]);
 
     auto tem = std::make_shared<trajectory_execution_manager::TrajectoryExecutionManager>(psm->getRobotModel(), psm->getStateMonitor(), true);
     tem->push(rtraj, "drone_controller");
 
     tem->executeAndWait();
+//
+    ros::waitForShutdown();
 
 //    collision_detection::CollisionRequest collision_request;
 //    collision_detection::CollisionResult collision_result;
@@ -282,6 +366,23 @@ int main(int argc, char** argv)
 //
 
     return 0;
+}
+
+trajectory_msgs::MultiDOFJointTrajectoryPoint stateToTrajectoryPoint(ob::State *st) {
+    trajectory_msgs::MultiDOFJointTrajectoryPoint mdjtp;
+    geometry_msgs::Transform tf;
+
+    tf.translation.x = st->as<ob::SE3StateSpace::StateType>()->getX();
+    tf.translation.y = st->as<ob::SE3StateSpace::StateType>()->getY();
+    tf.translation.z = st->as<ob::SE3StateSpace::StateType>()->getZ();
+
+    tf.rotation.x = st->as<ob::SE3StateSpace::StateType>()->rotation().x;
+    tf.rotation.y = st->as<ob::SE3StateSpace::StateType>()->rotation().y;
+    tf.rotation.z = st->as<ob::SE3StateSpace::StateType>()->rotation().z;
+    tf.rotation.w = st->as<ob::SE3StateSpace::StateType>()->rotation().w;
+
+    mdjtp.transforms.push_back(tf);
+    return mdjtp;
 }
 
 planning_interface::PlannerManagerPtr initPlannerManager(const ros::NodeHandle &nh, const moveit::core::RobotModelConstPtr& robot_model) {
