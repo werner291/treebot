@@ -17,6 +17,7 @@
 
 #include "look_forward.h"
 #include "conversions.h"
+#include "moveit_interaction.h"
 
 static const std::string PLANNING_GROUP = "whole_body";
 
@@ -24,38 +25,6 @@ namespace ob = ompl::base;
 namespace og = ompl::geometric;
 
 namespace rvt = rviz_visual_tools;
-
-std::shared_ptr<planning_scene_monitor::PlanningSceneMonitor> initPlanningSceneMonitor(std::shared_ptr<tf2_ros::Buffer> tfBuf) {
-    auto psm = std::make_shared<planning_scene_monitor::PlanningSceneMonitor>("robot_description", tfBuf);
-    psm->providePlanningSceneService();
-    psm->startStateMonitor();
-    psm->startSceneMonitor();
-    psm->startWorldGeometryMonitor();
-    psm->startPublishingPlanningScene(planning_scene_monitor::PlanningSceneMonitor::UPDATE_SCENE);
-
-    tfBuf->lookupTransform("base_link", "map", ros::Time(0.0), ros::Duration(5.0));
-    psm->waitForCurrentRobotState(ros::Time::now(), 5.0);
-
-    return psm;
-}
-
-void displayMultiDoFTrajectory(std::unique_ptr<moveit_visual_tools::MoveItVisualTools> &visual_tools,
-                               moveit_msgs::RobotTrajectory &robotTrajectory,
-                               const moveit::core::RobotState &current_state) {
-    moveit_msgs::DisplayTrajectory dt;
-    dt.trajectory.push_back(robotTrajectory);
-
-    moveit_msgs::RobotState robot_state_msg;
-    moveit::core::robotStateToRobotStateMsg(current_state, robot_state_msg);
-
-    moveit_msgs::DisplayTrajectory display_trajectory_msg;
-    display_trajectory_msg.model_id = current_state.getRobotModel()->getName();
-    display_trajectory_msg.trajectory.resize(1);
-    display_trajectory_msg.trajectory[0] = robotTrajectory;
-    display_trajectory_msg.trajectory_start = robot_state_msg;
-
-    visual_tools->publishTrajectoryPath(display_trajectory_msg);
-}
 
 int main(int argc, char** argv)
 {
