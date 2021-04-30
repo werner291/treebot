@@ -35,7 +35,7 @@ include_directories(
 # Treebot using moveit. #
 #########################
 
-add_executable(treebot src/treebot.cpp)
+add_executable(treebot src/treebot.cpp src/look_forward.cpp src/conversions.cpp)
 target_link_libraries(treebot ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} ${OMPL_LIBRARIES})
 
 if(catkin_EXPORTED_LIBRARIES)
