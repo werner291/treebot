@@ -22,6 +22,7 @@
 #include <ompl/geometric/planners/bitstar/BITstar.h>
 #include <ompl/base/DiscreteMotionValidator.h>
 #include <ompl/base/MotionValidator.h>
+#include "state_spaces.h"
 
 /***
  * Write the SE3State information into a named floating joint in the given RobotState.

@@ -89,15 +89,20 @@ trajectory_msgs::MultiDOFJointTrajectoryPoint stateToTrajectoryPoint(ompl::base:
     trajectory_msgs::MultiDOFJointTrajectoryPoint mdjtp;
     geometry_msgs::Transform tf;
 
-    tf.translation.x = st->as<ompl::base::SE3StateSpace::StateType>()->getX();
-    tf.translation.y = st->as<ompl::base::SE3StateSpace::StateType>()->getY();
-    tf.translation.z = st->as<ompl::base::SE3StateSpace::StateType>()->getZ();
+    auto st1 = st->as<PositionAndHeadingSpace::StateType>();
 
-    tf.rotation.x = st->as<ompl::base::SE3StateSpace::StateType>()->rotation().x;
-    tf.rotation.y = st->as<ompl::base::SE3StateSpace::StateType>()->rotation().y;
-    tf.rotation.z = st->as<ompl::base::SE3StateSpace::StateType>()->rotation().z;
-    tf.rotation.w = st->as<ompl::base::SE3StateSpace::StateType>()->rotation().w;
+    tf.translation.x = st1->getX();
+    tf.translation.y = st1->getY();
+    tf.translation.z = st1->getZ();
+
+    auto rot = st1->rotation();
+
+    tf.rotation.x = rot.x();
+    tf.rotation.y = rot.y();
+    tf.rotation.z = rot.z();
+    tf.rotation.w = rot.w();
 
     mdjtp.transforms.push_back(tf);
+
     return mdjtp;
 }

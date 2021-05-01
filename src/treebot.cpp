@@ -14,10 +14,14 @@
 #include <ompl/geometric/planners/fmt/FMT.h>
 #include <ompl/geometric/planners/bitstar/BITstar.h>
 #include <ompl/base/DiscreteMotionValidator.h>
+#include <ompl/base/spaces/constraint/ProjectedStateSpace.h>
+#include <ompl/base/Constraint.h>
+#include <algorithm>
 
 #include "look_forward.h"
 #include "conversions.h"
 #include "moveit_interaction.h"
+#include "state_spaces.h"
 
 static const std::string PLANNING_GROUP = "whole_body";
 
@@ -26,8 +30,25 @@ namespace og = ompl::geometric;
 
 namespace rvt = rviz_visual_tools;
 
-int main(int argc, char** argv)
-{
+
+//
+//class DroneConstraint : public ob::Constraint {
+//public:
+//    DroneConstraint() : Constraint(7,1) {}
+//
+//    void function(const Eigen::Ref<const Eigen::VectorXd> &x, Eigen::Ref<Eigen::VectorXd> out) const override {
+//
+//        Eigen::Quaterniond orientation(x[3],x[4],x[5],x[6]);
+//
+//        Eigen::Vector3d up(0,0,1.0);
+//
+//        out[0] = (orientation * up).z() - 1.0;
+//
+//    }
+//};
+
+
+int main(int argc, char** argv) {
     ros::init(argc, argv, "treebot_controller", 0);
     ros::NodeHandle nh;
 
@@ -40,7 +61,7 @@ int main(int argc, char** argv)
 
     auto psm = initPlanningSceneMonitor(tfBuf);
 
-    auto visual_tools = std::make_unique<moveit_visual_tools::MoveItVisualTools>("map", "markers_viz",psm);
+    auto visual_tools = std::make_unique<moveit_visual_tools::MoveItVisualTools>("map", "markers_viz", psm);
     visual_tools->deleteAllMarkers();
     visual_tools->trigger();
 
@@ -50,36 +71,68 @@ int main(int argc, char** argv)
     {
         planning_scene_monitor::LockedPlanningSceneRW ps(psm);
 
-        auto current_state = ps->getCurrentState();
-        auto space = std::make_shared<ob::SE3StateSpace>();
+//        auto constraint = std::make_shared<DroneConstraint>();
 
         ob::RealVectorBounds bounds(3);
-        bounds.setLow(-5.0);
-        bounds.setHigh(5.0);
-        space->setBounds(bounds);
+        for (int d = 0; d < 3; ++d) {
+            bounds.setLow(d, d == 2 ? 0.0 : -5.0);
+            bounds.setHigh(d, 5.0);
+        }
+        auto space = std::make_shared<PositionAndHeadingSpace>(bounds);
 
-        auto start = floatingJointPositionsToSE3(space, current_state.getJointPositions("world_joint"));
+        auto current_state = ps->getCurrentState();
 
-        ob::ScopedState<ob::SE3StateSpace> goal(space);
-        goal->setXYZ(-2.0, 2.0, 0.5);
-        goal->rotation().setIdentity();
+        ompl::base::ScopedState<PositionAndHeadingSpace> start(space);
+
+        double *floating_joint_positions = current_state.getVariablePositions();
+        start->as<PositionAndHeadingSpace::StateType>()->x = floating_joint_positions[0];
+        start->as<PositionAndHeadingSpace::StateType>()->y = floating_joint_positions[1];
+        start->as<PositionAndHeadingSpace::StateType>()->z = floating_joint_positions[2];
+
+        start->as<PositionAndHeadingSpace::StateType>()->heading =
+                Eigen::Quaterniond(&floating_joint_positions[3]).angularDistance(Eigen::Quaterniond::Identity());
+
+        ob::ScopedState<PositionAndHeadingSpace> goal(space);
+        goal->as<PositionAndHeadingSpace::StateType>()->x = 0.0;
+        goal->as<PositionAndHeadingSpace::StateType>()->y = 0.0;
+        goal->as<PositionAndHeadingSpace::StateType>()->z = 0.2;
+        goal->as<PositionAndHeadingSpace::StateType>()->heading = 0.0;
 
         auto si(std::make_shared<ob::SpaceInformation>(space));
 
-        auto dmv = std::make_shared<ob::DiscreteMotionValidator>(si);
-        auto mv(std::make_shared<LookForwardValidator>(si, dmv));
-        si->setMotionValidator(std::static_pointer_cast<ob::MotionValidator>(mv));
+//        space->setSpaceInformation(si.get());
 
-        si->setStateValidityChecker([&ps, current_state](const ob::State* st) {
+//        auto dmv = std::make_shared<ob::DiscreteMotionValidator>(si);
+//        auto mv(std::make_shared<LookForwardValidator>(si, dmv));
+//        si->setMotionValidator(std::static_pointer_cast<ob::MotionValidator>(mv));
+
+        si->setStateValidityChecker([&ps, current_state](const ob::State *st) {
+
+            auto st1 = st->as<PositionAndHeadingSpace::StateType>();
 
             // Since the floor in CopelliaSim isn't infinite,
             // I feel this is appropriate or the planner might try to pass underneath it.
-            if (st->as<ob::SE3StateSpace::StateType>()->getZ() < 0.0) {
+            if (st1->getZ() < 0.0) {
                 return false;
             }
 
             moveit::core::RobotState rs(current_state);
-            setFloatingJointFromSE3(st, rs, "world_joint");
+
+            Eigen::Quaterniond rot(Eigen::AngleAxisd(st1->getHeading(), Eigen::Vector3d(0,0,1)));
+
+            double positions[] = {
+                    st1->getX(),
+                    st1->getY(),
+                    st1->getZ(),
+                    rot.x(),
+                    rot.y(),
+                    rot.z(),
+                    rot.w()
+            };
+
+
+            rs.setJointPositions("world_joint", positions);
+
             rs.update();
 
             return ps->isStateValid(rs);
@@ -93,10 +146,10 @@ int main(int argc, char** argv)
         auto planner(std::make_shared<og::FMT>(si));
         planner->setProblemDefinition(pdef);
 
-        ob::PlannerStatus solved = planner->ob::Planner::solve(60.0);
+        std::cout << "Starting planner..." << std::endl;
+        ob::PlannerStatus solved = planner->ob::Planner::solve(10.0);
 
-        if (solved)
-        {
+        if (solved) {
             // print the path to screen
             const ob::PathPtr path = pdef->getSolutionPath();
 
@@ -106,6 +159,7 @@ int main(int argc, char** argv)
             robotTrajectory = trajectoryToMoveit(path);
         } else {
             ROS_ERROR("OMPL planner error: %s", solved.asString().c_str());
+            return 1;
         }
 
         displayMultiDoFTrajectory(visual_tools, robotTrajectory, current_state);
@@ -113,7 +167,8 @@ int main(int argc, char** argv)
         visual_tools->trigger();
     }
 
-    auto tem = std::make_shared<trajectory_execution_manager::TrajectoryExecutionManager>(psm->getRobotModel(), psm->getStateMonitor(), true);
+    auto tem = std::make_shared<trajectory_execution_manager::TrajectoryExecutionManager>(psm->getRobotModel(),
+                                                                                          psm->getStateMonitor(), true);
     tem->push(robotTrajectory, "drone_controller");
 
     tem->executeAndWait();
@@ -122,4 +177,3 @@ int main(int argc, char** argv)
 
     return 0;
 }
-
