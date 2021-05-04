@@ -83,7 +83,7 @@ double PositionAndHeadingSpace::distance(const ompl::base::State *state1, const 
     double linear = (s1->linear() - s2->linear()).norm();
     double angular = abs(s1->heading - s2->heading);
     if (angular > M_PI) {
-        angular = angular - M_PI;
+        angular = 2.0 * M_PI - angular;
     }
     return linear + angular;
 }
@@ -105,7 +105,7 @@ void PositionAndHeadingSpace::interpolate(const ompl::base::State *from, const o
     result->y = s1->y * (1.0 - t) + s2-> y * t;
     result->z = s1->z * (1.0 - t) + s2-> z * t;
 
-    double delta = s1->heading - s2->heading;
+    double delta = s2->heading - s1->heading;
 
     if (delta > M_PI) {
         delta = 2.0 * M_PI - delta;

@@ -16,12 +16,13 @@ public:
     LookForwardValidator(const ompl::base::SpaceInformationPtr &si,
                          std::shared_ptr<ompl::base::DiscreteMotionValidator> super) : MotionValidator(si), super_(std::move(super)) {}
 
-private:
+
     bool checkMotion(const ompl::base::State *s1, const ompl::base::State *s2) const override;
 
     bool checkMotion(const ompl::base::State *s1, const ompl::base::State *s2,
                      std::pair<ompl::base::State *, double> &lastValid) const override;
 
+private:
     std::shared_ptr<ompl::base::DiscreteMotionValidator> super_;
 
 

@@ -42,6 +42,13 @@ if(catkin_EXPORTED_LIBRARIES)
     add_dependencies(treebot ${catkin_EXPORTED_LIBRARIES})
 endif()
 
+#########################
+# Treebot BFMT test thing #
+#########################
+
+add_executable(treebot_bfmt src/ompl_bfmt_testcase.cpp)
+target_link_libraries(treebot_bfmt ${OMPL_LIBRARIES})
+
 ###########################################
 # CopelliaSim trajectory execution plugin #
 ###########################################

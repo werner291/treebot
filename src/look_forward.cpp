@@ -29,13 +29,15 @@
 #include <ros/ros.h>
 #include "look_forward.h"
 
+#include "state_spaces.h"
+
 namespace ob = ompl::base;
 namespace og = ompl::geometric;
 
 bool LookForwardValidator::checkMotion(const ompl::base::State *s1, const ompl::base::State *s2) const {
 
-    auto ss1 = s1->as<ompl::base::SE3StateSpace::StateType>();
-    auto ss2 = s2->as<ompl::base::SE3StateSpace::StateType>();
+    auto ss1 = s1->as<PositionAndHeadingSpace::StateType>();
+    auto ss2 = s2->as<PositionAndHeadingSpace::StateType>();
 
     Eigen::Vector3d forward_local(0.0, 1.0, 0.0);
 
@@ -43,12 +45,11 @@ bool LookForwardValidator::checkMotion(const ompl::base::State *s1, const ompl::
     double distance = delta_linear.norm();
 
     if (distance > std::numeric_limits<double>::epsilon()) {
-        Eigen::Quaterniond rot1(ss1->rotation().w, ss1->rotation().x, ss1->rotation().y, ss1->rotation().z);
-        auto fwd_1 = rot1 * forward_local;
-        Eigen::Quaterniond rot2(ss2->rotation().w, ss2->rotation().x, ss2->rotation().y, ss2->rotation().z);
-        auto fwd_2 = rot2 * forward_local;
-        return super_->checkMotion(s1, s2) && (fwd_1.dot(delta_linear) / distance > 0.8) &&
-               (fwd_2.dot(delta_linear) / distance > 0.5);
+        auto fwd_1 = ss1->rotation() * forward_local;
+        auto fwd_2 = ss2->rotation() * forward_local;
+        return super_->checkMotion(s1, s2) &&
+                (fwd_1.dot(delta_linear) / distance > 0.8) &&
+                (fwd_2.dot(delta_linear) / distance > 0.5);
     } else {
         return super_->checkMotion(s1, s2);
     }
