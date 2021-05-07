@@ -6,6 +6,8 @@
 #include <ompl/base/spaces/SE3StateSpace.h>
 #include "state_spaces.h"
 
+using namespace ompl::base;
+
 double clampd(double x, double lo, double hi) {
     if (x < lo) {
         return lo;
@@ -18,7 +20,7 @@ double clampd(double x, double lo, double hi) {
 
 double wrapAngle(double x) {
 
-    return x-(1-std::floor((x-M_PI)/(2 *M_PI))) * 2 * M_PI;
+    return x - std::floor( (x+M_PI)/(2.0*M_PI) ) * 2.0 * M_PI;
 }
 
 
@@ -81,7 +83,7 @@ double PositionAndHeadingSpace::distance(const ompl::base::State *state1, const 
     auto s1 = state1->as<StateType>();
     auto s2 = state2->as<StateType>();
     double linear = (s1->linear() - s2->linear()).norm();
-    double angular = abs(s1->heading - s2->heading);
+    double angular = abs(wrapAngle(s1->heading) - wrapAngle(s2->heading));
     if (angular > M_PI) {
         angular = 2.0 * M_PI - angular;
     }
@@ -142,4 +144,42 @@ void PositionAndHeadingSpace::enforceBounds(ompl::base::State *state) const {
     xyzh->z = clampd(xyzh->z, position_bounds_.low[2], position_bounds_.high[2]);
 
     xyzh->heading = wrapAngle(xyzh->heading);
+}
+
+class LinearPartProjection : public ProjectionEvaluator
+{
+public:
+
+    explicit LinearPartProjection(StateSpace* space) : ProjectionEvaluator(space)
+    {
+    }
+
+    unsigned int getDimension(void) const override
+    {
+        return 3;
+    }
+
+    void defaultCellSizes(void) override
+    {
+        cellSizes_.resize(3);
+        cellSizes_[0] = 0.2;
+        cellSizes_[0] = 0.2;
+        cellSizes_[0] = 0.2;
+    }
+
+    void project(const State *state, Eigen::Ref<Eigen::VectorXd> projection) const override
+    {
+        auto st = state->as<PositionAndHeadingSpace::StateType>();
+        projection(0) = st->x;
+        projection(1) = st->y;
+        projection(2) = st->z;
+    }
+};
+
+void PositionAndHeadingSpace::registerProjections() {
+
+    auto proj = std::make_shared<LinearPartProjection>(this);
+
+    registerDefaultProjection(proj);
+
 }

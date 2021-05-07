@@ -128,6 +128,13 @@ public:
 
     double *getValueAddressAtIndex(ompl::base::State *state, unsigned int index) const override;
 
+    void registerProjections() override;
+
+    void printState(const ompl::base::State *state, std::ostream &out) const override
+    {
+        auto st = state->as<StateType>();
+        out << "State instance [" << st->x << ", " <<  st->y << ", " << st->z << ", h:" << st->heading <<']' << std::endl;
+    }
 };
 
 

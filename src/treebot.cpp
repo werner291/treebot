@@ -18,9 +18,12 @@
 #include <ompl/geometric/planners/fmt/FMT.h>
 #include <ompl/geometric/planners/fmt/BFMT.h>
 #include <ompl/geometric/planners/bitstar/BITstar.h>
+#include <ompl/geometric/planners/kpiece/KPIECE1.h>
 #include <ompl/base/DiscreteMotionValidator.h>
 #include <ompl/base/spaces/constraint/ProjectedStateSpace.h>
 #include <ompl/base/Constraint.h>
+#include <ompl/base/OptimizationObjective.h>
+#include <ompl/base/objectives/PathLengthOptimizationObjective.h>
 #include <algorithm>
 
 #include <queue>
@@ -98,7 +101,11 @@ bool isTrajectoryStillValid(const std::shared_ptr<planning_scene_monitor::Planni
     si->setup();
     bool valid= true;
     for (int i = 0; i < states.size() - 1; i++) {
-        valid &= si->checkMotion(states[i], states[i + 1]);
+        bool segmentValid = si->checkMotion(states[i], states[i + 1]);
+
+//        ROS_INFO("Segment valid: %s", segmentValid ? "yes" : "no");
+
+        valid &= segmentValid;
     }
     return valid;
 }
@@ -131,7 +138,6 @@ int main(int argc, char **argv) {
     }
     auto space = std::make_shared<PositionAndHeadingSpace>(bounds);
 
-
     std::shared_ptr<ob::SpaceInformation> si(std::make_shared<ob::SpaceInformation>(space));
 
     std::shared_ptr<ob::DiscreteMotionValidator> dmv = std::make_shared<ob::DiscreteMotionValidator>(si);
@@ -140,16 +146,21 @@ int main(int argc, char **argv) {
 
     si->setMotionValidator(std::static_pointer_cast<ob::MotionValidator>(mv));
 
-//        auto planner(std::make_shared<og::BITstar>(si));
+    auto tem = std::make_shared<trajectory_execution_manager::TrajectoryExecutionManager>(psm->getRobotModel(),
+                                                                                          psm->getStateMonitor(), true);
+    tem->setAllowedStartTolerance(0.1);
+
+    bool taskCompleted = false;
+
+    do {
+
+        //        auto planner(std::make_shared<og::BITstar>(si));
 //    auto planner(std::make_shared<og::RRTConnect>(si));
 //    auto planner(std::make_shared<og::FMT>(si));
 //    planner->setNumSamples(10000);
 //    planner->setHeuristics(true);
     auto planner(std::make_shared<og::InformedRRTstar>(si));
-
-    auto tem = std::make_shared<trajectory_execution_manager::TrajectoryExecutionManager>(psm->getRobotModel(),
-                                                                                          psm->getStateMonitor(), true);
-    do {
+//        auto planner(std::make_shared<og::KPIECE1>(si));
 
         planning_scene::PlanningScenePtr ps = snapshotPlanningScene(psm);
 
@@ -160,45 +171,65 @@ int main(int argc, char **argv) {
 
         ompl::base::ScopedState<PositionAndHeadingSpace> start = moveItStateToPositionAndHeading(space, current_state);
 
+        start.print();
+
         ob::ScopedState<PositionAndHeadingSpace> goal(space);
         goal->setXYZH(0.0, 0.0, 0.2, 0.0);
 
         std::shared_ptr<ob::ProblemDefinition> pdef = std::make_shared<ob::ProblemDefinition>(si);
         pdef->setStartAndGoalStates(start, goal, 0.01);
 
+        auto opt(std::make_shared<ob::PathLengthOptimizationObjective>(si));
+
+        pdef->setOptimizationObjective(opt);
+
         planner->clear();
         planner->setProblemDefinition(pdef);
 
-        ob::PlannerStatus solved = planner->ob::Planner::solve(30.0);
 
-        ob::PlannerData pd(si);
-        planner->og::InformedRRTstar::getPlannerData(pd);
-        visualizePlannerStates(visual_tools, pd);
+        ob::PlannerStatus solved = planner->ob::Planner::solve(5.0);
 
-        visual_tools->trigger();
+//        ob::PlannerData pd(si);
+//        planner->og::KPIECE1::getPlannerData(pd);
+//        visualizePlannerStates(visual_tools, pd);
+//
+//        visual_tools->trigger();
 
         if (solved == ob::PlannerStatus::EXACT_SOLUTION) {
+
             // print the path to screen
             const ob::PathPtr path = pdef->getSolutionPath();
 
             auto states = path->as<ompl::geometric::PathGeometric>()->getStates();
 
-            for (ob::State *state : states) {
-                auto st = state->as<PositionAndHeadingSpace::StateType>();
-                ROS_INFO("[%f, %f, %f, h:%f]", st->x, st->y, st->z,st->heading);
+            {
+                moveit::core::RobotState state = ps->getCurrentState();
+                bool valid= true;
+                for (int i = 0; i < states.size() - 1; i++) {
+                    bool segmentValid = si->checkMotion(states[i], states[i + 1]);
+
+                    ROS_INFO("Segment valid: %s", segmentValid ? "yes" : "no");
+
+                    valid &= segmentValid;
+                }
             }
+
+            path->print(std::cout);
 
             moveit_msgs::RobotTrajectory robotTrajectory = trajectoryToMoveit(path);
 
             displayMultiDoFTrajectory(visual_tools, robotTrajectory, current_state);
 
-
-
             tem->push(robotTrajectory);
 
             bool done = false;
-            tem->execute([&done](auto status) {
-                ROS_INFO("CALLBACK!");
+            tem->execute([&done, &taskCompleted](auto status) {
+                ROS_INFO("Execution finished.");
+
+                if (status == moveit_controller_manager::ExecutionStatus::SUCCEEDED) {
+                    taskCompleted = true;
+                }
+
                 done = true;
             });
 
@@ -213,15 +244,21 @@ int main(int argc, char **argv) {
                 if (!valid) {
                     ROS_WARN("Trajectory invalidated!");
                     tem->stopExecution();
+                } else {
+                    ROS_INFO("Trajectory valid!");
                 }
             }
 
         } else {
-            ROS_ERROR("OMPL planner error: %s", solved.asString().c_str());
-            return 1;
+            ROS_ERROR("OMPL planner error: %s. Retrying.", solved.asString().c_str());
         }
 
-    } while (tem->getLastExecutionStatus() != moveit_controller_manager::ExecutionStatus::SUCCEEDED);
+        // Wait a bit to let the robot settle.
+        ros::Duration(2.0).sleep();
+
+    } while (!taskCompleted);
+
+    ROS_INFO("Task completed, waiting for shutdown signal.");
 
     ros::waitForShutdown();
 

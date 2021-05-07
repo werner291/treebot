@@ -2,6 +2,6 @@ sensors:
   - sensor_plugin: occupancy_map_monitor/PointCloudOctomapUpdater
     point_cloud_topic: /drone/front/points
     queue_size: 5
-    max_update_rate: 0.2
+    max_update_rate: 0.1
     octomap_frame: map
 octomap_resolution: 0.1

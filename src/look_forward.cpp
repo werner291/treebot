@@ -46,10 +46,9 @@ bool LookForwardValidator::checkMotion(const ompl::base::State *s1, const ompl::
 
     if (distance > std::numeric_limits<double>::epsilon()) {
         auto fwd_1 = ss1->rotation() * forward_local;
-        auto fwd_2 = ss2->rotation() * forward_local;
+        //auto fwd_2 = ss2->rotation() * forward_local;
         return super_->checkMotion(s1, s2) &&
-                (fwd_1.dot(delta_linear) / distance > 0.8) &&
-                (fwd_2.dot(delta_linear) / distance > 0.5);
+                (fwd_1.dot(delta_linear) / distance > 0.8);// && (fwd_2.dot(delta_linear) / distance > 0.5);
     } else {
         return super_->checkMotion(s1, s2);
     }
@@ -57,6 +56,20 @@ bool LookForwardValidator::checkMotion(const ompl::base::State *s1, const ompl::
 
 bool LookForwardValidator::checkMotion(const ompl::base::State *s1, const ompl::base::State *s2,
                                        std::pair<ompl::base::State *, double> &lastValid) const {
-    ROS_ERROR("Direction checking not implemented for checkMotion with lastValid");
-    return super_->checkMotion(s1, s2, lastValid);
+    auto ss1 = s1->as<PositionAndHeadingSpace::StateType>();
+    auto ss2 = s2->as<PositionAndHeadingSpace::StateType>();
+
+    Eigen::Vector3d forward_local(0.0, 1.0, 0.0);
+
+    Eigen::Vector3d delta_linear(ss2->getX() - ss1->getX(), ss2->getY() - ss1->getY(), ss2->getZ() - ss1->getZ());
+    double distance = delta_linear.norm();
+
+    if (distance > std::numeric_limits<double>::epsilon()) {
+        auto fwd_1 = ss1->rotation() * forward_local;
+        //auto fwd_2 = ss2->rotation() * forward_local;
+        return super_->checkMotion(s1, s2, lastValid) &&
+               (fwd_1.dot(delta_linear) / distance > 0.8);// && (fwd_2.dot(delta_linear) / distance > 0.5);
+    } else {
+        return super_->checkMotion(s1, s2, lastValid);
+    }
 }

@@ -65,6 +65,7 @@ void displayMultiDoFTrajectory(std::unique_ptr<moveit_visual_tools::MoveItVisual
     visual_tools->publishTrajectoryPath(display_trajectory_msg);
 }
 
+
 ompl::base::ScopedState<PositionAndHeadingSpace>
 moveItStateToPositionAndHeading(const std::shared_ptr<PositionAndHeadingSpace> &space,
                                 moveit::core::RobotState &current_state) {
@@ -75,10 +76,18 @@ moveItStateToPositionAndHeading(const std::shared_ptr<PositionAndHeadingSpace> &
     start->as<PositionAndHeadingSpace::StateType>()->y = floating_joint_positions[1];
     start->as<PositionAndHeadingSpace::StateType>()->z = floating_joint_positions[2];
 
-    start->as<PositionAndHeadingSpace::StateType>()->heading =
-            Eigen::Quaterniond(&floating_joint_positions[3]).angularDistance(Eigen::Quaterniond::Identity());
+    // Note: Eigen's quaternions are [w,x,y,z], but the floating joint has [x,y,z,w]
+    Eigen::Quaterniond rot(floating_joint_positions[6], floating_joint_positions[3], floating_joint_positions[4], floating_joint_positions[5]);
+
+    Eigen::Vector3d facing = rot * Eigen::Vector3d::UnitY();
+
+#pragma clang diagnostic push
+#pragma ide diagnostic ignored "ArgumentSelectionDefects"
+    start->as<PositionAndHeadingSpace::StateType>()->heading = -atan2(facing.x(), facing.y());
+#pragma clang diagnostic pop
     return start;
 }
+
 
 void visualizePlannerStates(std::unique_ptr<moveit_visual_tools::MoveItVisualTools> &visual_tools,
                             ompl::base::PlannerData &pd) {

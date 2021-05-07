@@ -3,8 +3,9 @@
     <link name="base_link">
         <visual>
             <geometry>
-                <cylinder length="0.2" radius="0.2"/>
+                <box size="0.36 0.36 0.05"/>
             </geometry>
+            <origin xyz="0.0 0.0 0.05"/>
         </visual>
         <visual>
             <geometry>
