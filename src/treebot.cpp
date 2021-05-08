@@ -24,6 +24,10 @@
 #include <ompl/base/Constraint.h>
 #include <ompl/base/OptimizationObjective.h>
 #include <ompl/base/objectives/PathLengthOptimizationObjective.h>
+#include <ompl/base/samplers/ObstacleBasedValidStateSampler.h>
+#include <ompl/control/SpaceInformation.h>
+#include <ompl/control/planners/rrt/RRT.h>
+#include <ompl/control/planners/sst/SST.h>
 #include <algorithm>
 
 #include <queue>
@@ -39,6 +43,7 @@ static const std::string PLANNING_GROUP = "whole_body";
 
 namespace ob = ompl::base;
 namespace og = ompl::geometric;
+namespace oc = ompl::control;
 
 namespace rvt = rviz_visual_tools;
 
@@ -85,12 +90,90 @@ public:
 
 };
 
+class DroneControlSpace : public oc::ControlSpace {
+
+    class DroneControlSampler : public oc::ControlSampler {
+public:
+    DroneControlSampler(const ControlSpace *space) : ControlSampler(space) {}
+
+    void sample(ompl::control::Control *control) override {
+        auto c = dynamic_cast<DroneControl *>(control);
+
+        const double LINEAR_PART_TANGENT = 0.3;
+
+        Eigen::Vector3d linear_part(rng_.uniformReal(-LINEAR_PART_TANGENT,LINEAR_PART_TANGENT), 1.0, rng_.uniformReal(-LINEAR_PART_TANGENT,LINEAR_PART_TANGENT));
+        linear_part.normalize();
+        linear_part *= rng_.uniformReal(0.0,1.0);
+
+        c->x = linear_part.x();
+        c->y = linear_part.y();
+        c->z = linear_part.z();
+
+        c->rotational = rng_.uniformReal(-1.0,1.0);
+    }
+
+};
+
+public:
+    DroneControlSpace(const ompl::base::StateSpacePtr &stateSpace) : ControlSpace(stateSpace) {}
+
+    unsigned int getDimension() const override {
+        return 4;
+    }
+
+    ompl::control::Control *allocControl() const override {
+        return static_cast<oc::Control *>(new DroneControl());
+    }
+
+    void freeControl(ompl::control::Control *control) const override {
+        delete dynamic_cast<DroneControl *>(control);
+    }
+
+    void copyControl(ompl::control::Control *destination, const ompl::control::Control *source) const override {
+        auto d = dynamic_cast<DroneControl *>(destination);
+        auto s = dynamic_cast<const DroneControl *>(source);
+
+        d->x = s->x;
+        d->y = s->y;
+        d->z = s->z;
+        d->rotational = s->rotational;
+    }
+
+    bool equalControls(const ompl::control::Control *control1, const ompl::control::Control *control2) const override {
+        auto c1 = dynamic_cast<const DroneControl *>(control1);
+        auto c2 = dynamic_cast<const DroneControl *>(control2);
+
+        return c1->x == c2->x && c1->y == c2->y && c1->z == c2->z && c1->rotational == c2->rotational;
+    }
+
+    void nullControl(ompl::control::Control *control) const override {
+        auto c = dynamic_cast<DroneControl *>(control);
+        c->x = 0.0;
+        c->y = 0.0;
+        c->z = 0.0;
+        c->rotational = 0.0;
+    }
+
+    ompl::control::ControlSamplerPtr allocDefaultControlSampler() const override {
+        return std::make_shared<DroneControlSampler>(this);
+    }
+
+
+    class DroneControl : public oc::Control {
+    public:
+        double x = 0.0;
+        double y = 0.0;
+        double z = 0.0;
+        double rotational = 0.0;
+    };
+};
+
 planning_scene::PlanningScenePtr
 snapshotPlanningScene(const std::shared_ptr<planning_scene_monitor::PlanningSceneMonitor> &psm);
 
 bool isTrajectoryStillValid(const std::shared_ptr<planning_scene_monitor::PlanningSceneMonitor> &psm,
                             const std::vector<ob::State *> &states,
-                            std::shared_ptr<ob::SpaceInformation> &si) {
+                            const std::shared_ptr<ob::SpaceInformation> &si) {
     planning_scene::PlanningScenePtr ps;
     {
         // Keep in a block to drop the lock.
@@ -138,13 +221,32 @@ int main(int argc, char **argv) {
     }
     auto space = std::make_shared<PositionAndHeadingSpace>(bounds);
 
-    std::shared_ptr<ob::SpaceInformation> si(std::make_shared<ob::SpaceInformation>(space));
+    auto controlspace = std::make_shared<DroneControlSpace>(space);
 
-    std::shared_ptr<ob::DiscreteMotionValidator> dmv = std::make_shared<ob::DiscreteMotionValidator>(si);
+//    auto si(std::make_shared<ob::SpaceInformation>(space));
+    auto si(std::make_shared<oc::SpaceInformation>(space, controlspace));
+    si->setStatePropagator([] (const ob::State *from, const oc::Control *control, const double, ob::State *to) {
+        auto frm = dynamic_cast<const PositionAndHeadingSpace::StateType*>(from);
+        auto result = dynamic_cast<PositionAndHeadingSpace::StateType*>(to);
+        auto ctrl = dynamic_cast<const DroneControlSpace::DroneControl*>(control);
 
-    std::shared_ptr<LookForwardValidator> mv = std::make_shared<LookForwardValidator>(si, dmv);
+        auto rot = frm->rotation();
+        auto linear_part = rot * Eigen::Vector3d(ctrl->x, ctrl->y, ctrl->z);
 
-    si->setMotionValidator(std::static_pointer_cast<ob::MotionValidator>(mv));
+        // TODO: Step size?
+        result->x = frm->x + linear_part.x();
+        result->y = frm->y + linear_part.y();
+        result->z = frm->z + linear_part.z();
+        result->heading = frm->heading + ctrl->rotational;
+    });
+
+//    si->setValidStateSamplerAllocator([](auto si) {
+//        return std::make_shared<ob::ObstacleBasedValidStateSampler>(si);
+//    });
+
+//    std::shared_ptr<ob::DiscreteMotionValidator> dmv = std::make_shared<ob::DiscreteMotionValidator>(si);
+//    std::shared_ptr<LookForwardValidator> mv = std::make_shared<LookForwardValidator>(si, dmv);
+//    si->setMotionValidator(std::static_pointer_cast<ob::MotionValidator>(mv));
 
     auto tem = std::make_shared<trajectory_execution_manager::TrajectoryExecutionManager>(psm->getRobotModel(),
                                                                                           psm->getStateMonitor(), true);
@@ -159,7 +261,10 @@ int main(int argc, char **argv) {
 //    auto planner(std::make_shared<og::FMT>(si));
 //    planner->setNumSamples(10000);
 //    planner->setHeuristics(true);
-    auto planner(std::make_shared<og::InformedRRTstar>(si));
+//    auto planner(std::make_shared<og::InformedRRTstar>(si));
+    auto planner(std::make_shared<oc::SST>(si));
+//    planner->inter(true);
+
 //        auto planner(std::make_shared<og::KPIECE1>(si));
 
         planning_scene::PlanningScenePtr ps = snapshotPlanningScene(psm);
@@ -187,15 +292,14 @@ int main(int argc, char **argv) {
         planner->setProblemDefinition(pdef);
 
 
-        ob::PlannerStatus solved = planner->ob::Planner::solve(5.0);
+        ob::PlannerStatus solved = planner->ob::Planner::solve(10.0);
 
 //        ob::PlannerData pd(si);
-//        planner->og::KPIECE1::getPlannerData(pd);
+//        planner->oc::RRT::getPlannerData(pd);
 //        visualizePlannerStates(visual_tools, pd);
-//
 //        visual_tools->trigger();
 
-        if (solved == ob::PlannerStatus::EXACT_SOLUTION) {
+        if (solved == ob::PlannerStatus::EXACT_SOLUTION || ob::PlannerStatus::APPROXIMATE_SOLUTION) {
 
             // print the path to screen
             const ob::PathPtr path = pdef->getSolutionPath();

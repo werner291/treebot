@@ -82,7 +82,7 @@ moveItStateToPositionAndHeading(const std::shared_ptr<PositionAndHeadingSpace> &
     Eigen::Vector3d facing = rot * Eigen::Vector3d::UnitY();
 
 #pragma clang diagnostic push
-#pragma ide diagnostic ignored "ArgumentSelectionDefects"
+#pragma ide diagnostic ignored "ArgumentSelectionDefects" // It seems to be running fine.
     start->as<PositionAndHeadingSpace::StateType>()->heading = -atan2(facing.x(), facing.y());
 #pragma clang diagnostic pop
     return start;
@@ -91,6 +91,7 @@ moveItStateToPositionAndHeading(const std::shared_ptr<PositionAndHeadingSpace> &
 
 void visualizePlannerStates(std::unique_ptr<moveit_visual_tools::MoveItVisualTools> &visual_tools,
                             ompl::base::PlannerData &pd) {
+
     for (int i = 0; i < pd.numVertices(); ++i) {
 
         auto v = pd.getVertex(i);
