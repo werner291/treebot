@@ -87,7 +87,7 @@ double PositionAndHeadingSpace::distance(const ompl::base::State *state1, const 
     if (angular > M_PI) {
         angular = 2.0 * M_PI - angular;
     }
-    return linear + angular;
+    return linear + DISTANCE_ANGULAR_WEIGHT * angular;
 }
 
 bool PositionAndHeadingSpace::equalStates(const ompl::base::State *state1, const ompl::base::State *state2) const {

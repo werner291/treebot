@@ -9,26 +9,12 @@
 #include <ompl/base/spaces/SE3StateSpace.h>
 #include "DroneControlSpace.h"
 
-void propagateStateFromDroneControl(const ompl::base::State *from, const ompl::control::Control *control, const double,
-                                    ompl::base::State *to) {
-    auto frm = dynamic_cast<const PositionAndHeadingSpace::StateType*>(from);
-    auto result = dynamic_cast<PositionAndHeadingSpace::StateType*>(to);
-    auto ctrl = dynamic_cast<const DroneControl*>(control);
 
-    auto rot = frm->rotation();
-    auto linear_part = rot * Eigen::Vector3d(ctrl->x, ctrl->y, ctrl->z);
-
-    // TODO: Step size?
-    result->x = frm->x + linear_part.x();
-    result->y = frm->y + linear_part.y();
-    result->z = frm->z + linear_part.z();
-    result->heading = frm->heading + ctrl->rotational;
-}
 
 void DroneControlSampler::sample(ompl::control::Control *control) {
     auto c = dynamic_cast<DroneControl *>(control);
 
-    const double LINEAR_PART_TANGENT = 0.3;
+
 
     Eigen::Vector3d linear_part(rng_.uniformReal(-LINEAR_PART_TANGENT, LINEAR_PART_TANGENT), 1.0,
                                 rng_.uniformReal(-LINEAR_PART_TANGENT, LINEAR_PART_TANGENT));
@@ -82,4 +68,19 @@ void DroneControlSpace::freeControl(ompl::control::Control *control) const {
 
 unsigned int DroneControlSpace::getDimension() const {
     return 4;
+}
+
+void DronePropagator::propagate(const ompl::base::State *from, const ompl::control::Control *control, double duration,
+                                ompl::base::State *to) const {
+    auto frm = dynamic_cast<const PositionAndHeadingSpace::StateType*>(from);
+    auto result = dynamic_cast<PositionAndHeadingSpace::StateType*>(to);
+    auto ctrl = dynamic_cast<const DroneControl*>(control);
+
+    auto rot = frm->rotation();
+    auto linear_part = rot * Eigen::Vector3d(ctrl->x, ctrl->y, ctrl->z);
+
+    result->x = frm->x + linear_part.x() * duration;
+    result->y = frm->y + linear_part.y() * duration;
+    result->z = frm->z + linear_part.z() * duration;
+    result->heading = frm->heading + ctrl->rotational * duration;
 }

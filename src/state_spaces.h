@@ -5,6 +5,8 @@
 #ifndef TREEBOT_STATE_SPACES_H
 #define TREEBOT_STATE_SPACES_H
 
+static const double DISTANCE_ANGULAR_WEIGHT = M_1_PI;
+
 #include <algorithm>
 #include <ompl/base/StateSpace.h>
 #include "conversions.h"

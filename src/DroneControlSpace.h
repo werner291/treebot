@@ -9,6 +9,8 @@
 #include <ompl/control/SpaceInformation.h>
 #include "state_spaces.h"
 
+const double LINEAR_PART_TANGENT = 0.5;
+
 class DroneControl : public ompl::control::Control {
 public:
     double x = 0.0;
@@ -55,6 +57,38 @@ public:
 /**
  * Implementation of a state propagator for DroneControl and PositionAndHeadingSpace
  */
-void propagateStateFromDroneControl(const ompl::base::State *from, const ompl::control::Control *control, double, ompl::base::State *to);
+class DronePropagator : public ompl::control::StatePropagator {
+public:
+    DronePropagator(ompl::control::SpaceInformation *si) : StatePropagator(si) {}
 
+    void propagate(const ompl::base::State *from, const ompl::control::Control *control, double duration,
+                   ompl::base::State *to) const override;
+
+//    virtual bool steer(const ompl::base::State * from, const ompl::base::State * to, ompl::control::Control * result,
+//                       double & duration) const
+//    {
+//        auto frm = dynamic_cast<const PositionAndHeadingSpace::StateType*>(from);
+//        auto dst = dynamic_cast<const PositionAndHeadingSpace::StateType*>(to);
+//
+//        auto delta_local = frm->rotation().inverse() * (dst->linear() - frm->linear());
+//        auto linear_distance = delta_local
+//
+//
+//        auto delta_local_unit = delta_local.normalized();
+//
+//        if (abs(delta_local.x()) < 0.3 )
+//
+//
+//        auto ctrl = dynamic_cast<DroneControl*>(result);
+//
+//        return false;
+//    }
+//
+//    /** \brief Return true if the steer() function has been implemented */
+//    virtual bool canSteer() const
+//    {
+//        return true;
+//    }
+
+};
 #endif //TREEBOT_DRONECONTROLSPACE_H

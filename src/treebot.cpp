@@ -1,33 +1,21 @@
 #include <ros/ros.h>
 #include <geometry_msgs/PointStamped.h>
-#include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_monitor/planning_scene_monitor.h>
 #include <moveit/planning_interface/planning_interface.h>
 #include <moveit/trajectory_execution_manager/trajectory_execution_manager.h>
-#include <moveit_msgs/DisplayRobotState.h>
 #include <moveit_msgs/DisplayTrajectory.h>
 #include <moveit_visual_tools/moveit_visual_tools.h>
 #include <moveit/robot_state/conversions.h>
-#include <moveit/plan_execution/plan_execution.h>
 #include <tf2_ros/transform_listener.h>
 #include <ompl/base/spaces/SE3StateSpace.h>
-#include <ompl/geometric/planners/rrt/RRTConnect.h>
-#include <ompl/geometric/planners/rrt/RRTsharp.h>
-#include <ompl/geometric/planners/rrt/InformedRRTstar.h>
-#include <ompl/geometric/planners/rrt/RRT.h>
-#include <ompl/geometric/planners/fmt/FMT.h>
-#include <ompl/geometric/planners/fmt/BFMT.h>
-#include <ompl/geometric/planners/bitstar/BITstar.h>
-#include <ompl/geometric/planners/kpiece/KPIECE1.h>
-#include <ompl/base/DiscreteMotionValidator.h>
-#include <ompl/base/spaces/constraint/ProjectedStateSpace.h>
-#include <ompl/base/Constraint.h>
 #include <ompl/base/OptimizationObjective.h>
 #include <ompl/base/objectives/PathLengthOptimizationObjective.h>
 #include <ompl/base/samplers/ObstacleBasedValidStateSampler.h>
 #include <ompl/control/SpaceInformation.h>
-#include <ompl/control/planners/rrt/RRT.h>
 #include <ompl/control/planners/sst/SST.h>
+#include <ompl/control/planners/kpiece/KPIECE1.h>
+#include <ompl/control/planners/pdst/PDST.h>
+#include <ompl/control/SimpleDirectedControlSampler.h>
 #include <algorithm>
 
 #include <queue>
@@ -65,20 +53,26 @@ int main(int argc, char **argv) {
     auto psm = initPlanningSceneMonitor(tfBuf, 1.0);
 
     auto visual_tools = std::make_unique<moveit_visual_tools::MoveItVisualTools>("map", "markers_viz", psm);
-    visual_tools->deleteAllMarkers();
-    visual_tools->trigger();
 
     auto si = initSpaceInformation();
 
+    si->setDirectedControlSamplerAllocator([](const oc::SpaceInformation * si) {
+        return std::make_shared<oc::SimpleDirectedControlSampler>(si, 10);
+    });
+
     auto tem = std::make_shared<trajectory_execution_manager::TrajectoryExecutionManager>(psm->getRobotModel(),
                                                                                           psm->getStateMonitor(), true);
-    tem->setAllowedStartTolerance(0.1);
+    tem->setAllowedStartTolerance(0.5);
 
     bool taskCompleted = false;
 
     do {
 
-        auto planner(std::make_shared<oc::SST>(si));
+        visual_tools->deleteAllMarkers();
+        visual_tools->trigger();
+
+//        auto planner(std::make_shared<oc::SST>(si));
+        auto planner(std::make_shared<oc::PDST>(si));
 
         planning_scene::PlanningScenePtr ps = snapshotPlanningScene(psm);
 
@@ -92,7 +86,7 @@ int main(int argc, char **argv) {
         auto start = moveItStateToPositionAndHeading(space, current_state);
 
         ob::ScopedState<PositionAndHeadingSpace> goal(space);
-        goal->setXYZH(0.0, 0.0, 0.2, 0.0);
+        goal->setXYZH(0.0, 0.0, 0.4, 0.0);
 
         std::shared_ptr<ob::ProblemDefinition> pdef = std::make_shared<ob::ProblemDefinition>(si);
         pdef->setStartAndGoalStates(start, goal, 0.01);
@@ -101,15 +95,17 @@ int main(int argc, char **argv) {
 
         pdef->setOptimizationObjective(opt);
 
-        planner->clear();
         planner->setProblemDefinition(pdef);
 
-        ob::PlannerStatus solved = planner->ob::Planner::solve(10.0);
 
+        ob::PlannerStatus solved = planner->ob::Planner::solve(20.0);
+//
 //        ob::PlannerData pd(si);
-//        planner->oc::RRT::getPlannerData(pd);
+//        planner->oc::KPIECE1::getPlannerData(pd);
 //        visualizePlannerStates(visual_tools, pd);
 //        visual_tools->trigger();
+
+        ROS_INFO("Planner finished with status: %s", solved.asString().c_str());
 
         if (solved == ob::PlannerStatus::EXACT_SOLUTION || ob::PlannerStatus::APPROXIMATE_SOLUTION) {
 
@@ -117,18 +113,6 @@ int main(int argc, char **argv) {
             const ob::PathPtr path = pdef->getSolutionPath();
 
             auto states = path->as<ompl::geometric::PathGeometric>()->getStates();
-
-            {
-                moveit::core::RobotState state = ps->getCurrentState();
-                bool valid = true;
-                for (int i = 0; i < states.size() - 1; i++) {
-                    bool segmentValid = si->checkMotion(states[i], states[i + 1]);
-
-                    ROS_INFO("Segment valid: %s", segmentValid ? "yes" : "no");
-
-                    valid &= segmentValid;
-                }
-            }
 
             path->print(std::cout);
 
@@ -160,8 +144,6 @@ int main(int argc, char **argv) {
                 if (!valid) {
                     ROS_WARN("Trajectory invalidated!");
                     tem->stopExecution();
-                } else {
-                    ROS_INFO("Trajectory valid!");
                 }
             }
 
@@ -174,7 +156,7 @@ int main(int argc, char **argv) {
 
     } while (!taskCompleted);
 
-    ROS_INFO("Task completed, waiting for shutdown signal.");
+    ROS_INFO("\\033[32m Task completed, waiting for shutdown signal.");
 
     ros::waitForShutdown();
 
@@ -202,7 +184,7 @@ std::shared_ptr<oc::SpaceInformation> initSpaceInformation() {
     auto space = std::make_shared<PositionAndHeadingSpace>(bounds);
     auto controlspace = std::make_shared<DroneControlSpace>(space);
     auto si(std::make_shared<oc::SpaceInformation>(space, controlspace));
-    si->setStatePropagator(propagateStateFromDroneControl);
+    si->setStatePropagator(std::make_shared<DronePropagator>(si.get()));
     return si;
 }
 
