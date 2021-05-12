@@ -58,6 +58,7 @@ int main(int argc, char **argv) {
 
     si->setDirectedControlSamplerAllocator([](const oc::SpaceInformation * si) {
         return std::make_shared<oc::SimpleDirectedControlSampler>(si, 10);
+//        return std::make_shared<DroneDirectedControlSampler>(si);
     });
 
     auto tem = std::make_shared<trajectory_execution_manager::TrajectoryExecutionManager>(psm->getRobotModel(),
@@ -73,6 +74,7 @@ int main(int argc, char **argv) {
 
 //        auto planner(std::make_shared<oc::SST>(si));
         auto planner(std::make_shared<oc::PDST>(si));
+
 
         planning_scene::PlanningScenePtr ps = snapshotPlanningScene(psm);
 
@@ -97,17 +99,22 @@ int main(int argc, char **argv) {
 
         planner->setProblemDefinition(pdef);
 
+        auto planner_start_time = ros::Time::now();
 
+//        ob::PlannerStatus solved = planner->solve(ob::PlannerTerminationCondition([&pdef, planner_start_time]() {
+//            printf("Difference: %f", pdef->getSolutionDifference());
+//            return pdef->getSolutionDifference() < 0.5 && (ros::Time::now() - planner_start_time) > ros::Duration(20.0);
+//        }));
         ob::PlannerStatus solved = planner->ob::Planner::solve(20.0);
 //
 //        ob::PlannerData pd(si);
-//        planner->oc::KPIECE1::getPlannerData(pd);
+//        planner->oc::PDST::getPlannerData(pd);
 //        visualizePlannerStates(visual_tools, pd);
 //        visual_tools->trigger();
 
         ROS_INFO("Planner finished with status: %s", solved.asString().c_str());
 
-        if (solved == ob::PlannerStatus::EXACT_SOLUTION || ob::PlannerStatus::APPROXIMATE_SOLUTION) {
+        if (solved == ob::PlannerStatus::EXACT_SOLUTION || solved == ob::PlannerStatus::APPROXIMATE_SOLUTION) {
 
             // print the path to screen
             const ob::PathPtr path = pdef->getSolutionPath();

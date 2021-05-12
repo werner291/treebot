@@ -7,6 +7,7 @@
 
 #include <Eigen/Geometry>
 #include <ompl/control/SpaceInformation.h>
+#include <ompl/control/DirectedControlSampler.h>
 #include "state_spaces.h"
 
 const double LINEAR_PART_TANGENT = 0.5;
@@ -27,6 +28,17 @@ public:
     explicit DroneControlSampler(const ompl::control::ControlSpace *space) : ControlSampler(space) {}
 
     void sample(ompl::control::Control *control) override;
+};
+
+class DroneDirectedControlSampler : public ompl::control::DirectedControlSampler {
+public:
+    explicit DroneDirectedControlSampler(const ompl::control::SpaceInformation *space) : DirectedControlSampler(space) {}
+
+    unsigned int sampleTo(ompl::control::Control *control, const ompl::base::State *source, ompl::base::State *dest) override;
+
+    unsigned int
+    sampleTo(ompl::control::Control *control, const ompl::control::Control *previous, const ompl::base::State *source,
+             ompl::base::State *dest) override;
 };
 
 /**
@@ -51,6 +63,11 @@ public:
 
     ompl::control::ControlSamplerPtr allocDefaultControlSampler() const override;
 
+    void printControl(const ompl::control::Control *control, std::ostream &out = std::cout) const override {
+        auto st = control->as<DroneControl>();
+        out << "Control instance [" << st->x << ", " <<  st->y << ", " << st->z << ", h:" << st->rotational <<']' << std::endl;
+    }
+
 
 };
 
@@ -63,32 +80,6 @@ public:
 
     void propagate(const ompl::base::State *from, const ompl::control::Control *control, double duration,
                    ompl::base::State *to) const override;
-
-//    virtual bool steer(const ompl::base::State * from, const ompl::base::State * to, ompl::control::Control * result,
-//                       double & duration) const
-//    {
-//        auto frm = dynamic_cast<const PositionAndHeadingSpace::StateType*>(from);
-//        auto dst = dynamic_cast<const PositionAndHeadingSpace::StateType*>(to);
-//
-//        auto delta_local = frm->rotation().inverse() * (dst->linear() - frm->linear());
-//        auto linear_distance = delta_local
-//
-//
-//        auto delta_local_unit = delta_local.normalized();
-//
-//        if (abs(delta_local.x()) < 0.3 )
-//
-//
-//        auto ctrl = dynamic_cast<DroneControl*>(result);
-//
-//        return false;
-//    }
-//
-//    /** \brief Return true if the steer() function has been implemented */
-//    virtual bool canSteer() const
-//    {
-//        return true;
-//    }
 
 };
 #endif //TREEBOT_DRONECONTROLSPACE_H

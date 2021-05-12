@@ -3,4 +3,4 @@ sensors:
     point_cloud_topic: /drone/front/points
     queue_size: 5
     octomap_frame: map
-octomap_resolution: 0.1
+octomap_resolution: 0.05

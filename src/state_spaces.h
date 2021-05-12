@@ -5,12 +5,19 @@
 #ifndef TREEBOT_STATE_SPACES_H
 #define TREEBOT_STATE_SPACES_H
 
-static const double DISTANCE_ANGULAR_WEIGHT = M_1_PI;
-
 #include <algorithm>
 #include <ompl/base/StateSpace.h>
 #include "conversions.h"
 #include "look_forward.h"
+#include <math.h>
+
+static const double DISTANCE_ANGULAR_WEIGHT = M_1_PI;
+
+double wrapAngle(double x);
+
+double quaternionToHeading(const Eigen::Quaterniond &rot);
+
+double headingFromVector(const Eigen::Vector3d &facing);
 
 class PositionAndHeadingSpace : public ompl::base::StateSpace {
 

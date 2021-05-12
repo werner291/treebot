@@ -44,6 +44,7 @@
 #include <tf2_ros/transform_listener.h>
 #include <utility>
 
+
 class MoveitStateChecker : public ompl::base::StateValidityChecker {
 
   const planning_scene::PlanningScenePtr ps_;

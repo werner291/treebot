@@ -35,7 +35,9 @@ include_directories(
 # Treebot using moveit. #
 #########################
 
-add_executable(treebot src/treebot.cpp src/look_forward.cpp src/conversions.cpp src/moveit_interaction.cpp src/state_spaces.cpp src/FourierSeriesPlanner.cpp src/DroneControlSpace.cpp)
+set(TREEBOT_NONMAIN_SRC src/look_forward.cpp src/conversions.cpp src/moveit_interaction.cpp src/state_spaces.cpp src/FourierSeriesPlanner.cpp src/DroneControlSpace.cpp)
+
+add_executable(treebot src/treebot.cpp ${TREEBOT_NONMAIN_SRC})
 target_link_libraries(treebot ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} ${OMPL_LIBRARIES})
 
 if(catkin_EXPORTED_LIBRARIES)
@@ -48,6 +50,14 @@ endif()
 
 add_executable(treebot_bfmt src/ompl_bfmt_testcase.cpp)
 target_link_libraries(treebot_bfmt ${OMPL_LIBRARIES})
+
+#################
+# Treebot tests #
+#################
+
+add_executable (treebot_tests test/test.cpp ${TREEBOT_NONMAIN_SRC})
+target_include_directories(treebot_tests PRIVATE src)
+target_link_libraries (treebot_tests ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} ${OMPL_LIBRARIES})
 
 ###########################################
 # CopelliaSim trajectory execution plugin #

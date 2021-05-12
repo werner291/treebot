@@ -84,3 +84,47 @@ void DronePropagator::propagate(const ompl::base::State *from, const ompl::contr
     result->z = frm->z + linear_part.z() * duration;
     result->heading = frm->heading + ctrl->rotational * duration;
 }
+
+unsigned int DroneDirectedControlSampler::sampleTo(ompl::control::Control *control, const ompl::base::State *source,
+                                                   ompl::base::State *dest) {
+    auto from = dynamic_cast<const PositionAndHeadingSpace::StateType*>(source);
+    auto to = dynamic_cast<const PositionAndHeadingSpace::StateType*>(dest);
+    auto ctrl = dynamic_cast<DroneControl*>(control);
+
+    auto linear_delta_local = from->rotation().inverse() * (to->linear() - from->linear());
+
+    auto distance = linear_delta_local.norm();
+
+    if (distance > std::numeric_limits<double>::epsilon()) {
+        auto unit_delta = linear_delta_local.normalized();
+
+        if (unit_delta.y() < 0.8) {
+            ctrl->x = 0.0;
+            ctrl->y = 0.0;
+            ctrl->z = 0.0;
+        } else {
+
+            ctrl->x = unit_delta.x() * distance;
+            ctrl->y = unit_delta.y() * distance;
+            ctrl->z = unit_delta.z() * distance;
+        }
+
+        ctrl->rotational = wrapAngle(headingFromVector(unit_delta) - from->heading);
+
+    } else {
+        ctrl->x = 0.0;
+        ctrl->y = 0.0;
+        ctrl->z = 0.0;
+        ctrl->rotational = wrapAngle(to->heading - from->heading);
+    }
+
+    si_->propagate(source, control, 1, dest);
+
+    return 1;
+}
+
+unsigned int
+DroneDirectedControlSampler::sampleTo(ompl::control::Control *control, const ompl::control::Control *previous,
+                                      const ompl::base::State *source, ompl::base::State *dest) {
+    return sampleTo(control,source,dest);
+}

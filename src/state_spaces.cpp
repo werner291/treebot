@@ -18,10 +18,7 @@ double clampd(double x, double lo, double hi) {
     }
 }
 
-double wrapAngle(double x) {
 
-    return x - std::floor( (x+M_PI)/(2.0*M_PI) ) * 2.0 * M_PI;
-}
 
 
 void PositionAndHeadingSpace::StateSampler::sampleUniform(ompl::base::State *state) {
@@ -41,11 +38,18 @@ void PositionAndHeadingSpace::StateSampler::sampleUniformNear(ompl::base::State 
     auto nr = near->as<PositionAndHeadingSpace::StateType>();
     auto space = dynamic_cast<const PositionAndHeadingSpace*>(space_);
 
-    st->x = rng_.uniformReal(std::max(space->position_bounds_.low[0], nr->x - distance), std::min(space->position_bounds_.high[0], nr->x + distance));
-    st->y = rng_.uniformReal(std::max(space->position_bounds_.low[1], nr->y - distance), std::min(space->position_bounds_.high[1], nr->y + distance));
-    st->z = rng_.uniformReal(std::max(space->position_bounds_.low[2], nr->z - distance), std::min(space->position_bounds_.high[2], nr->z + distance));
+    double linear_part = rng_.uniformReal(0.0, distance);
+    double angular_part = (distance - linear_part)/DISTANCE_ANGULAR_WEIGHT;
 
-    st->heading = wrapAngle(nr->heading + rng_.uniformReal(-distance, distance));
+    std::vector<double> components(3);
+    rng_.uniformInBall(linear_part, components);
+
+    st->x = components[0] + nr->x;
+    st->y = components[1] + nr->y;
+    st->z = components[2] + nr->z;
+    st->heading = rng_.uniformReal(-angular_part,angular_part) + nr->heading;
+
+    space_->enforceBounds(state);
 }
 
 void PositionAndHeadingSpace::StateSampler::sampleGaussian(ompl::base::State *state, const ompl::base::State *mean,
@@ -176,10 +180,39 @@ public:
     }
 };
 
+double headingFromVector(const Eigen::Vector3d &facing);
+
 void PositionAndHeadingSpace::registerProjections() {
 
     auto proj = std::make_shared<LinearPartProjection>(this);
 
     registerDefaultProjection(proj);
 
+}
+
+double wrapAngle(double x) {
+
+    return x - std::floor( (x+M_PI)/(2.0*M_PI) ) * 2.0 * M_PI;
+}
+
+
+double quaternionToHeading(const Eigen::Quaterniond &rot) {
+
+    Eigen::Vector3d facing = rot * Eigen::Vector3d::UnitY();
+
+    double heading = headingFromVector(facing);
+
+    return heading;
+}
+
+double headingFromVector(const Eigen::Vector3d &facing) {
+
+#pragma clang diagnostic push
+#pragma ide diagnostic ignored                                                 \
+    "ArgumentSelectionDefects" // It seems to be running fine.
+    double heading =
+            -atan2(facing.x(), facing.y());
+#pragma clang diagnostic pop
+
+    return heading;
 }

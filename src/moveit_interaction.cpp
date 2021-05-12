@@ -28,6 +28,8 @@
 #include <queue>
 #include <tf2_ros/transform_listener.h>
 
+double quaternionToHeading(const Eigen::Quaterniond &rot);
+
 std::shared_ptr<planning_scene_monitor::PlanningSceneMonitor>
 initPlanningSceneMonitor(const std::shared_ptr<tf2_ros::Buffer> &tfBuf,
                          double first_message_delay = 1.0) {
@@ -89,22 +91,24 @@ moveItStateToPositionAndHeading(
             floating_joint_positions[6], floating_joint_positions[3],
             floating_joint_positions[4], floating_joint_positions[5]);
 
-    Eigen::Vector3d facing = rot * Eigen::Vector3d::UnitY();
+    double heading = quaternionToHeading(rot);
 
-#pragma clang diagnostic push
-#pragma ide diagnostic ignored                                                 \
-    "ArgumentSelectionDefects" // It seems to be running fine.
-    start->as<PositionAndHeadingSpace::StateType>()->heading =
-            -atan2(facing.x(), facing.y());
-#pragma clang diagnostic pop
+    start->as<PositionAndHeadingSpace::StateType>()->heading = heading;
+
     return start;
 }
+
+
 
 void visualizePlannerStates(
         std::unique_ptr<moveit_visual_tools::MoveItVisualTools> &visual_tools,
         ompl::base::PlannerData &pd) {
 
-    for (int i = 0; i < pd.numVertices(); ++i) {
+    if (pd.numVertices() > 1000) {
+        ROS_WARN("More than 1000 states available (%d), showing first 1000", pd.numVertices());
+    }
+
+    for (int i = 0; i < pd.numVertices() && i < 1000; ++i) {
 
         auto v = pd.getVertex(i);
         auto st = v.getState()->as<PositionAndHeadingSpace::StateType>();
