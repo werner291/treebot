@@ -22,7 +22,7 @@ find_package(ompl REQUIRED)
 catkin_package(
 #  INCLUDE_DIRS include
   LIBRARIES convert_pcl
-  CATKIN_DEPENDS roscpp std_msgs moveit_core moveit_ros_planning_interface moveit_visual_tools moveit_simple_controller_manager actionlib
+  CATKIN_DEPENDS roscpp std_msgs moveit_core moveit_ros_planning_interface moveit_visual_tools moveit_simple_controller_manager actionlib sensor_msgs
   DEPENDS EIGEN3
 )
 

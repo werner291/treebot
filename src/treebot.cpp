@@ -13,20 +13,20 @@
 #include <ompl/base/samplers/ObstacleBasedValidStateSampler.h>
 #include <ompl/control/SpaceInformation.h>
 #include <ompl/control/planners/sst/SST.h>
-#include <ompl/control/planners/kpiece/KPIECE1.h>
 #include <ompl/control/planners/pdst/PDST.h>
 #include <ompl/control/SimpleDirectedControlSampler.h>
 #include <algorithm>
+#include <sensor_msgs/PointCloud2.h>
 
 #include <queue>
 #include <memory>
-#include <utility>
+#include <sensor_msgs/point_cloud2_iterator.h>
 
-#include "look_forward.h"
 #include "conversions.h"
 #include "moveit_interaction.h"
 #include "state_spaces.h"
 #include "DroneControlSpace.h"
+#include <mutex>
 
 static const std::string PLANNING_GROUP = "whole_body";
 
@@ -41,12 +41,35 @@ snapshotPlanningScene(const std::shared_ptr<planning_scene_monitor::PlanningScen
 
 std::shared_ptr<oc::SpaceInformation> initSpaceInformation();
 
+std::vector<Eigen::Vector3d> pointCloudToTargets(const sensor_msgs::PointCloud2ConstPtr &points_msg) {
+    sensor_msgs::PointCloud2ConstIterator<float> iter_x(*points_msg, "x");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_y(*points_msg, "y");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_z(*points_msg, "z");
+
+    std::vector<Eigen::Vector3d> targets;
+
+    for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z)
+    {
+        targets.emplace_back(*iter_x, *iter_y, *iter_z);
+    }
+    return targets;
+}
+
 int main(int argc, char **argv) {
     ros::init(argc, argv, "treebot_controller", 0);
     ros::NodeHandle nh;
 
     ros::AsyncSpinner spinner(1);
     spinner.start();
+
+    std::mutex targets_mutex;
+    std::vector<Eigen::Vector3d> latest_targets;
+
+    auto targets_sub = nh.subscribe<sensor_msgs::PointCloud2>("/touch_targets", 100, [&targets_mutex, &latest_targets](const sensor_msgs::PointCloud2ConstPtr &points_msg) {
+        const std::lock_guard<std::mutex> lock(targets_mutex);
+
+        latest_targets = pointCloudToTargets(points_msg);
+    });
 
     auto tfBuf = std::make_shared<tf2_ros::Buffer>(ros::Duration(10.0), true);
     auto tfList = std::make_shared<tf2_ros::TransformListener>(*tfBuf);
@@ -77,6 +100,10 @@ int main(int argc, char **argv) {
 
 
         planning_scene::PlanningScenePtr ps = snapshotPlanningScene(psm);
+        std::vector<Eigen::Vector3d> targets;
+        {        const std::lock_guard<std::mutex> lock(targets_mutex);
+            targets = latest_targets;
+        }
 
         moveit::core::RobotState current_state = ps->getCurrentState();
 
@@ -92,6 +119,8 @@ int main(int argc, char **argv) {
 
         std::shared_ptr<ob::ProblemDefinition> pdef = std::make_shared<ob::ProblemDefinition>(si);
         pdef->setStartAndGoalStates(start, goal, 0.01);
+
+
 
         auto opt(std::make_shared<ob::PathLengthOptimizationObjective>(si));
 
