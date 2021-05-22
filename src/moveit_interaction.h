@@ -5,6 +5,13 @@
 #ifndef TREEBOT_MOVEIT_INTERACTION_H
 #define TREEBOT_MOVEIT_INTERACTION_H
 
+#include <unordered_set>
+
+
+static const double LONGEST_DISTANCE = 100.0;
+
+static const double TARGET_REACH_THRESHOLD = 0.2;
+
 #include "conversions.h"
 #include "look_forward.h"
 #include "state_spaces.h"
@@ -44,6 +51,8 @@
 #include <tf2_ros/transform_listener.h>
 #include <utility>
 
+planning_scene::PlanningScenePtr
+snapshotPlanningScene(const std::shared_ptr<planning_scene_monitor::PlanningSceneMonitor> &psm);
 
 class MoveitStateChecker : public ompl::base::StateValidityChecker {
 

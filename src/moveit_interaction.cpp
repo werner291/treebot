@@ -184,3 +184,13 @@ bool isTrajectoryStillValid(const std::shared_ptr<planning_scene_monitor::Planni
     }
     return valid;
 }
+
+planning_scene::PlanningScenePtr
+snapshotPlanningScene(const std::shared_ptr<planning_scene_monitor::PlanningSceneMonitor> &psm) {
+    planning_scene::PlanningScenePtr ps;
+    {
+        // Keep in a block to drop the lock.
+        ps = planning_scene_monitor::LockedPlanningSceneRO(psm)->diff();
+    }
+    return ps;
+}

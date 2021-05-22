@@ -5,18 +5,36 @@
             <geometry>
                 <box size="0.36 0.36 0.05"/>
             </geometry>
-            <origin xyz="0.0 0.0 0.05"/>
+            <origin xyz="0.0 0.0 0.0"/>
         </visual>
         <visual>
             <geometry>
-                <sphere radius="0.05"/>
+                <box size="0.01 0.5 0.01"/>
             </geometry>
-            <origin xyz="0.0 0.2 0.0"/>
+            <origin xyz="0.0 0.3 0.0"/>
         </visual>
         <collision>
             <geometry>
                 <cylinder length="0.1" radius="0.25"/>
             </geometry>
         </collision>
+        <collision>
+            <geometry>
+                <box size="0.01 0.5 0.01"/>
+            </geometry>
+            <origin xyz="0.0 0.3 0.0"/>
+        </collision>
     </link>
+    <link name="end_effector">
+        <visual>
+            <geometry>
+                <sphere radius="0.05"/>
+            </geometry>
+        </visual>
+    </link>
+    <joint name="stick" type="fixed">
+        <parent link="base_link"/>
+        <child link="end_effector"/>
+        <origin xyz="0.0 0.6750 0.0"/>
+    </joint>
 </robot>
