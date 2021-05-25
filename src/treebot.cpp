@@ -44,7 +44,7 @@ class EigenVector3dHash {
     std::hash<double> hash;
 
 public:
-    size_t operator()(const Eigen::Vector3d& v) const {
+    size_t operator()(const Eigen::Vector3d &v) const {
         size_t h = hash(v.x());
         h = hash(v.y()) + h * 31;
         h = hash(v.z()) + h * 31;
@@ -58,13 +58,26 @@ typedef std::unordered_set<Eigen::Vector3d, EigenVector3dHash> TargetSet;
 struct VertexData {
     const moveit::core::RobotState state;
     double costToGo;
-    double badness;
+    double bestCostToGo; // We'll want something more statistical later, this is too sensitive.
 };
 
 typedef boost::directed_graph<VertexData> Graph;
 
 typedef boost::graph_traits<Graph> GraphTraits;
 typedef GraphTraits::vertex_descriptor VertexDescriptor;
+
+struct StackFrame {
+    VertexDescriptor vertex;
+    std::optional<Eigen::Vector3d> target;
+};
+
+struct AlgorithmState {
+
+    std::vector<StackFrame> stack;
+    Graph graph;
+    TargetSet remaining_targets;
+
+};
 
 planning_scene::PlanningScenePtr
 snapshotPlanningScene(const std::shared_ptr<planning_scene_monitor::PlanningSceneMonitor> &psm);
@@ -84,7 +97,14 @@ geometry_msgs::Transform baseLinkTransform(const moveit::core::RobotState &state
 void visualizeGraph(std::unique_ptr<moveit_visual_tools::MoveItVisualTools> &visual_tools,
                     const Graph &graph);
 
-std::pair<double,Eigen::Vector3d> costToGoToNearest(const TargetSet &targets, const Eigen::Vector3d &end_effector_pos) {
+void backtrackOnce(AlgorithmState &algoState);
+
+VertexDescriptor getBestChild(const AlgorithmState &algoState, VertexDescriptor current);
+
+moveit_msgs::RobotTrajectory StateVetorToTrajectory(std::vector<moveit::core::RobotState> &trajectory);
+
+std::pair<double, Eigen::Vector3d>
+costToGoToNearest(const TargetSet &targets, const Eigen::Vector3d &end_effector_pos) {
     double square_distance_to_nearest_target = std::numeric_limits<double>::infinity();
     Eigen::Vector3d closest_target;
     for (const Eigen::Vector3d &point : targets) {
@@ -96,15 +116,15 @@ std::pair<double,Eigen::Vector3d> costToGoToNearest(const TargetSet &targets, co
             closest_target = point;
         }
     }
-    return std::make_pair(sqrt(square_distance_to_nearest_target),closest_target);
+    return std::make_pair(sqrt(square_distance_to_nearest_target), closest_target);
 }
 
 
 double euclideanPathLength(const std::vector<Eigen::Vector3d> &points) {
     double best_length = 0.0;
 
-    for (int i=0; i<points.size()-1;i++) {
-        best_length += (points[i] - points[i+1]).norm();
+    for (int i = 0; i < points.size() - 1; i++) {
+        best_length += (points[i] - points[i + 1]).norm();
     }
     return best_length;
 }
@@ -116,14 +136,13 @@ std::vector<Eigen::Vector3d> pointCloudToTargets(const sensor_msgs::PointCloud2C
 
     std::vector<Eigen::Vector3d> targets;
 
-    for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z)
-    {
+    for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
         targets.emplace_back(*iter_x, *iter_y, *iter_z);
     }
     return targets;
 }
 
-void bogo_tsp(std::vector<Eigen::Vector3d>& points) {
+void bogo_tsp(std::vector<Eigen::Vector3d> &points) {
 
     double best_length = euclideanPathLength(points);
 
@@ -146,7 +165,6 @@ void bogo_tsp(std::vector<Eigen::Vector3d>& points) {
 }
 
 
-
 int main(int argc, char **argv) {
     ros::init(argc, argv, "treebot_controller", 0);
     ros::NodeHandle nh;
@@ -157,7 +175,8 @@ int main(int argc, char **argv) {
     std::mutex targets_mutex;
     std::vector<Eigen::Vector3d> latest_targets;
 
-    auto targets_sub = nh.subscribe<sensor_msgs::PointCloud2>("/touch_targets", 100, [&targets_mutex, &latest_targets](const sensor_msgs::PointCloud2ConstPtr &points_msg) {
+    auto targets_sub = nh.subscribe<sensor_msgs::PointCloud2>("/touch_targets", 100, [&targets_mutex, &latest_targets](
+            const sensor_msgs::PointCloud2ConstPtr &points_msg) {
         const std::lock_guard<std::mutex> lock(targets_mutex);
 
         latest_targets = pointCloudToTargets(points_msg);
@@ -170,78 +189,69 @@ int main(int argc, char **argv) {
     auto visual_tools = std::make_unique<moveit_visual_tools::MoveItVisualTools>("map", "markers_viz", psm);
     visual_tools->deleteAllMarkers();
 
-    auto si = initSpaceInformation();
-
-    si->setDirectedControlSamplerAllocator([](const oc::SpaceInformation * si) {
-        return std::make_shared<oc::SimpleDirectedControlSampler>(si, 10);
-//        return std::make_shared<DroneDirectedControlSampler>(si);
-    });
-
     auto tem = std::make_shared<trajectory_execution_manager::TrajectoryExecutionManager>(psm->getRobotModel(),
                                                                                           psm->getStateMonitor(), true);
     tem->setAllowedStartTolerance(0.5);
 
     bool taskCompleted = false;
 
-//    goToTarget(targets_mutex, latest_targets, psm, visual_tools, si, tem, taskCompleted);
-
-    std::vector<Eigen::Vector3d> targets;
-    {        const std::lock_guard<std::mutex> lock(targets_mutex);
-        targets = latest_targets;
-    }
-
-
-
-    Graph graph;
+    AlgorithmState algoState;
 
     while (ros::ok()) {
-        planning_scene::PlanningScenePtr ps = snapshotPlanningScene(psm);
-        const moveit::core::LinkModel* end_effector = ps->getRobotModel()->getLinkModel("end_effector");
 
-        graph.clear();
-        TargetSet result;// We'll want to use some kind of spatial structure at some point.
-        result = TargetSet(targets.begin(), targets.end());
-        auto remaining_targets = result;
+        {
+            const std::lock_guard<std::mutex> lock(targets_mutex);
+            algoState.remaining_targets.insert(latest_targets.begin(), latest_targets.end());
+        }
+
+        if (algoState.remaining_targets.empty()) {
+            tem->stopExecution();
+            break;
+        }
+
+        planning_scene::PlanningScenePtr ps = snapshotPlanningScene(psm);
+        const moveit::core::LinkModel *end_effector = ps->getRobotModel()->getLinkModel("end_effector");
+
 
         const moveit::core::RobotState start_state = ps->getCurrentState();
-        double initialCostToGo = costToGoToNearest(remaining_targets, start_state.getGlobalLinkTransform(end_effector).translation()).first / LONGEST_DISTANCE + (double) targets.size();
-        const VertexDescriptor start = graph.add_vertex({start_state, initialCostToGo, 0.0});
+        double initialCostToGo = costToGoToNearest(algoState.remaining_targets, start_state.getGlobalLinkTransform(
+                end_effector).translation()).first / LONGEST_DISTANCE + (double) algoState.remaining_targets.size();
+
+        const VertexDescriptor start = algoState.graph.add_vertex({
+                                                                          .state = start_state,
+                                                                          .costToGo = initialCostToGo,
+                                                                          .bestCostToGo = initialCostToGo
+                                                                  });
 
         std::default_random_engine rng(ros::Time::now().toNSec());
         std::uniform_real_distribution<double> angles(-0.3, 0.3);
 
         std::uniform_real_distribution<double> zerotoOne(0.0, 1.0);
 
-        struct StackFrame {
-            VertexDescriptor vertex;
-            std::optional<Eigen::Vector3d> target;
-        };
-
-        std::vector<StackFrame> stack;
-        stack.push_back({start,{}});
+        algoState.stack.push_back({start, {}});
 
         for (int i = 0; i < 10000; i++) {
 
-            auto current_node = stack.back().vertex;
-            auto current = graph[current_node];
+            auto current_node = algoState.stack.back().vertex;
+            auto current = algoState.graph[current_node];
 
             double progress = 0.0;
-            if (stack.size() > 2) {
-                double last_cost = graph[stack[stack.size() - 2].vertex].costToGo;
+            if (algoState.stack.size() > 2) {
+                double last_cost = algoState.graph[algoState.stack[algoState.stack.size() - 2].vertex].costToGo;
                 progress = last_cost - current.costToGo;
             }
 
-            if (!ps->isStateValid(current.state) || (zerotoOne(rng) < (progress > 0.0 ? 0.01 : 0.05) && stack.size() > 1)) {
+            bool invalid_state = !ps->isStateValid(current.state);
 
-                size_t backtrack_jump = 1 + std::min(std::geometric_distribution<size_t>(progress > 0.0 ? 0.06 : 0.02)(rng), stack.size() - 2);
 
-//                printf("Backtracking to index: %d\n out of %u\n", backtrack_jump, stack.size());
+            if (invalid_state || (zerotoOne(rng) < (progress > 0.0 ? 0.01 : 0.05) && algoState.stack.size() > 1)) {
+
+                size_t backtrack_jump = 1 +
+                                        std::min(std::geometric_distribution<size_t>(progress > 0.0 ? 0.06 : 0.02)(rng),
+                                                 algoState.stack.size() - 2);
 
                 for (int jump_i = 0; jump_i < backtrack_jump; jump_i++) {
-                    if (stack.back().target.has_value()) {
-                        remaining_targets.insert(stack.back().target.value());
-                    }
-                    stack.pop_back();
+                    backtrackOnce(algoState);
                 }
 
             } else {
@@ -254,65 +264,60 @@ int main(int argc, char **argv) {
 
                 double target_distance;
                 Eigen::Vector3d nearest_target;
-                std::tie(target_distance, nearest_target) = costToGoToNearest(remaining_targets, end_effector_pos);
+                std::tie(target_distance, nearest_target) = costToGoToNearest(algoState.remaining_targets,
+                                                                              end_effector_pos);
 
                 std::optional<Eigen::Vector3d> reached_target;
                 if (target_distance < TARGET_REACH_THRESHOLD) {
-                    remaining_targets.erase(nearest_target);
+                    algoState.remaining_targets.erase(nearest_target);
                     reached_target = {nearest_target};
                 } else {
                     reached_target = {};
                 }
 
-                double costToGo = target_distance / LONGEST_DISTANCE + (double) remaining_targets.size();// + (double) targets.size();
+                double costToGo = target_distance / LONGEST_DISTANCE +
+                                  (double) algoState.remaining_targets.size();// + (double) targets.size();
 
-                auto next_node = graph.add_vertex({next_state,costToGo});
+                auto next_node = algoState.graph.add_vertex({
+                                                                    .state =  next_state,
+                                                                    .costToGo =  costToGo,
+                                                                    .bestCostToGo =  costToGo
+                                                            });
 
-                graph.add_edge(current_node, next_node);
+                algoState.graph.add_edge(current_node, next_node);
 
                 assert(next_node != nullptr);
-                stack.push_back({next_node, reached_target});
+                algoState.stack.push_back({next_node, reached_target});
             }
 
 
         }
 
-        visualizeGraph(visual_tools, graph);
+        while (!algoState.stack.empty()) {
+            backtrackOnce(algoState);
+        }
 
-        //        std::vector<moveit::core::RobotState> trajectory;
+        visual_tools->deleteAllMarkers();
+        visualizeGraph(visual_tools, algoState.graph);
+
+        std::vector<moveit::core::RobotState> trajectory;
+
+        VertexDescriptor current = start;
+        do {
+            trajectory.push_back(algoState.graph[current].state);
+
+            current = getBestChild(algoState, current);
+
+        } while (boost::out_degree(current, algoState.graph) > 0);
+
+        moveit_msgs::RobotTrajectory rtraj = StateVetorToTrajectory(trajectory);
+
+        tem->stopExecution();
+        tem->push(rtraj);
+        tem->execute();
 //
-//        do {
-//
-//            trajectory.push_back(graph[current_node].state);
-//
-//            current_node = boost::in_edges(current_node, graph).first->m_source;
-//
-//        } while (current_node != start);
-//
-//        std::reverse(trajectory.begin(), trajectory.end());
-//
-//        moveit_msgs::RobotTrajectory rtraj;
-//        rtraj.multi_dof_joint_trajectory.joint_names.push_back("world_joint");
-//
-//        ros::Duration time_from_start(0.0);
-//
-//        for (const auto& state: trajectory) {
-//            geometry_msgs::Transform tf = baseLinkTransform(state);
-//
-//            trajectory_msgs::MultiDOFJointTrajectoryPoint trajpt;
-//            trajpt.transforms.push_back(tf);
-//            trajpt.time_from_start = time_from_start;
-//            time_from_start += ros::Duration(1.0);
-//
-//            rtraj.multi_dof_joint_trajectory.points.push_back(trajpt);
-//        }
-//
-//        tem->stopExecution();
-//        tem->push(rtraj);
-//        tem->execute();
-//
-//        ros::Duration(1.0).sleep();
-        ros::waitForShutdown();
+        ros::Duration(5.0).sleep();
+//        ros::waitForShutdown();
     }
 
 
@@ -332,13 +337,69 @@ int main(int argc, char **argv) {
     return 0;
 }
 
+moveit_msgs::RobotTrajectory StateVetorToTrajectory(std::vector<moveit::core::RobotState> &trajectory) {
+    moveit_msgs::RobotTrajectory rtraj;
+    rtraj.multi_dof_joint_trajectory.joint_names.push_back("world_joint");
+
+    ros::Duration time_from_start(0.0);
+
+    for (const auto& state: trajectory) {
+        geometry_msgs::Transform tf = baseLinkTransform(state);
+
+        trajectory_msgs::MultiDOFJointTrajectoryPoint trajpt;
+        trajpt.transforms.push_back(tf);
+        trajpt.time_from_start = time_from_start;
+        time_from_start += ros::Duration(1.0);
+
+        rtraj.multi_dof_joint_trajectory.points.push_back(trajpt);
+    }
+    return rtraj;
+}
+
+VertexDescriptor getBestChild(const AlgorithmState &algoState, VertexDescriptor current) {
+    typename boost::graph_traits<Graph>::out_edge_iterator ei, ei_end;
+
+    double bestCost = std::numeric_limits<double>::infinity();
+
+    for (std::tie(ei, ei_end) = boost::out_edges(current, algoState.graph); ei != ei_end; ++ei) {
+        VertexDescriptor candidate = ei->m_target;
+        double candidate_bestCost = algoState.graph[candidate].bestCostToGo;
+
+        if (candidate_bestCost < bestCost) {
+            current = candidate;
+            bestCost = candidate_bestCost;
+        }
+    }
+    return current;
+}
+
+void backtrackOnce(AlgorithmState &algoState) {
+
+    if (algoState.stack.back().target.has_value()) {
+        algoState.remaining_targets.insert(algoState.stack.back().target.value());
+    }
+
+    VertexDescriptor current_node1 = algoState.stack.back().vertex;
+    VertexData &current = algoState.graph[current_node1];
+
+    current.bestCostToGo = current.costToGo;
+
+    typename boost::graph_traits<Graph>::out_edge_iterator ei, ei_end;
+
+    for (std::tie(ei, ei_end) = boost::out_edges(current_node1, algoState.graph); ei != ei_end; ++ei) {
+        current.bestCostToGo = std::min(current.bestCostToGo, algoState.graph[ei->m_target].bestCostToGo);
+    }
+
+    algoState.stack.pop_back();
+}
+
 void visualizeGraph(std::unique_ptr<moveit_visual_tools::MoveItVisualTools> &visual_tools,
                     const Graph &graph) {
     double maxCost = -std::numeric_limits<double>::infinity();
     double minCost = std::numeric_limits<double>::infinity();
     for (auto vp = vertices(graph); vp.first != vp.second; ++vp.first) {
-        maxCost = std::max(maxCost,graph[*vp.first].costToGo);
-        minCost = std::min(minCost,graph[*vp.first].costToGo);
+        maxCost = std::max(maxCost, graph[*vp.first].bestCostToGo);
+        minCost = std::min(minCost, graph[*vp.first].bestCostToGo);
     }
 
     visualization_msgs::Marker marker;
@@ -366,16 +427,17 @@ void visualizeGraph(std::unique_ptr<moveit_visual_tools::MoveItVisualTools> &vis
 
         marker.id++;
         marker.color.a = 1.0;
-        double color_t = sqrt((state.costToGo - minCost) / (maxCost - minCost));
-        if (color_t > 0.5) {
-            printf("%f %f %f %f\n", color_t, tf.translation().x(), tf.translation().y(), tf.translation().z());
-        }
-        marker.color.r = static_cast<float>(color_t);
-        marker.color.g = static_cast<float>(1.0 - color_t);
-        marker.color.b = 0.0;
-        marker.pose = rvt::RvizVisualTools::convertPose(tf * Eigen::AngleAxisd(M_PI / 2, Eigen::Vector3d::UnitZ()));
+        double color_t = sqrt((state.bestCostToGo - minCost) / (maxCost - minCost));
 
-        visual_tools->publishMarker(marker);
+        if (color_t < 0.5) {
+
+            marker.color.r = static_cast<float>(color_t);
+            marker.color.g = static_cast<float>(1.0 - color_t);
+            marker.color.b = 0.0;
+            marker.pose = rvt::RvizVisualTools::convertPose(tf * Eigen::AngleAxisd(M_PI / 2, Eigen::Vector3d::UnitZ()));
+
+            visual_tools->publishMarker(marker);
+        }
     }
     visual_tools->trigger();
 }
@@ -412,7 +474,8 @@ sampleNearbyState(std::default_random_engine &rng,
 
     auto next_rot = rot * Eigen::AngleAxisd(angles(rng), Eigen::Vector3d::UnitZ());
 
-    Eigen::Vector3d next_position = base_position + next_rot * Eigen::Vector3d(0.0,0.1,0.0) + Eigen::Vector3d(0.0,0.0,std::uniform_real_distribution<double>(-0.05,0.05)(rng));
+    Eigen::Vector3d next_position = base_position + next_rot * Eigen::Vector3d(0.0, 0.1, 0.0) +
+                                    Eigen::Vector3d(0.0, 0.0, std::uniform_real_distribution<double>(-0.05, 0.05)(rng));
 
     moveit::core::RobotState next_state = floatingJointStateFromPositionANdRotation(node_state, next_rot,
                                                                                     next_position);
