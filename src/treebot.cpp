@@ -101,7 +101,7 @@ void backtrackOnce(AlgorithmState &algoState);
 
 VertexDescriptor getBestChild(const AlgorithmState &algoState, VertexDescriptor current);
 
-moveit_msgs::RobotTrajectory StateVetorToTrajectory(std::vector<moveit::core::RobotState> &trajectory);
+moveit_msgs::RobotTrajectory StateVectorToTrajectory(std::vector<moveit::core::RobotState> &trajectory);
 
 std::pair<double, Eigen::Vector3d>
 costToGoToNearest(const TargetSet &targets, const Eigen::Vector3d &end_effector_pos) {
@@ -119,16 +119,6 @@ costToGoToNearest(const TargetSet &targets, const Eigen::Vector3d &end_effector_
     return std::make_pair(sqrt(square_distance_to_nearest_target), closest_target);
 }
 
-
-double euclideanPathLength(const std::vector<Eigen::Vector3d> &points) {
-    double best_length = 0.0;
-
-    for (int i = 0; i < points.size() - 1; i++) {
-        best_length += (points[i] - points[i + 1]).norm();
-    }
-    return best_length;
-}
-
 std::vector<Eigen::Vector3d> pointCloudToTargets(const sensor_msgs::PointCloud2ConstPtr &points_msg) {
     sensor_msgs::PointCloud2ConstIterator<float> iter_x(*points_msg, "x");
     sensor_msgs::PointCloud2ConstIterator<float> iter_y(*points_msg, "y");
@@ -141,29 +131,6 @@ std::vector<Eigen::Vector3d> pointCloudToTargets(const sensor_msgs::PointCloud2C
     }
     return targets;
 }
-
-void bogo_tsp(std::vector<Eigen::Vector3d> &points) {
-
-    double best_length = euclideanPathLength(points);
-
-    std::default_random_engine rng(ros::Time::now().toNSec());
-
-    for (int i = 0; i < 1000; i++) {
-
-        std::vector<Eigen::Vector3d> copy(points.begin(), points.end());
-
-        std::shuffle(copy.begin(), copy.end(), rng);
-
-        double new_length = euclideanPathLength(copy);
-
-        if (new_length < best_length) {
-            points.assign(copy.begin(), copy.end());
-            best_length = new_length;
-        }
-    }
-
-}
-
 
 int main(int argc, char **argv) {
     ros::init(argc, argv, "treebot_controller", 0);
@@ -193,8 +160,6 @@ int main(int argc, char **argv) {
                                                                                           psm->getStateMonitor(), true);
     tem->setAllowedStartTolerance(0.5);
 
-    bool taskCompleted = false;
-
     AlgorithmState algoState;
 
     while (ros::ok()) {
@@ -211,7 +176,6 @@ int main(int argc, char **argv) {
 
         planning_scene::PlanningScenePtr ps = snapshotPlanningScene(psm);
         const moveit::core::LinkModel *end_effector = ps->getRobotModel()->getLinkModel("end_effector");
-
 
         const moveit::core::RobotState start_state = ps->getCurrentState();
         double initialCostToGo = costToGoToNearest(algoState.remaining_targets, start_state.getGlobalLinkTransform(
@@ -230,7 +194,9 @@ int main(int argc, char **argv) {
 
         algoState.stack.push_back({start, {}});
 
-        for (int i = 0; i < 10000; i++) {
+        auto planner_start = ros::Time::now();
+
+        while (ros::Time::now() - planner_start < ros::Duration(1.0)) {
 
             auto current_node = algoState.stack.back().vertex;
             auto current = algoState.graph[current_node];
@@ -242,7 +208,6 @@ int main(int argc, char **argv) {
             }
 
             bool invalid_state = !ps->isStateValid(current.state);
-
 
             if (invalid_state || (zerotoOne(rng) < (progress > 0.0 ? 0.01 : 0.05) && algoState.stack.size() > 1)) {
 
@@ -256,8 +221,6 @@ int main(int argc, char **argv) {
 
             } else {
                 moveit::core::RobotState next_state = sampleNearbyState(rng, angles, current.state);
-
-                // TODO: "Badness" travels up the tree.
 
                 auto end_effector_xform = current.state.getGlobalLinkTransform(end_effector);
                 Eigen::Vector3d end_effector_pos = end_effector_xform.translation();
@@ -289,16 +252,14 @@ int main(int argc, char **argv) {
                 assert(next_node != nullptr);
                 algoState.stack.push_back({next_node, reached_target});
             }
-
-
         }
 
         while (!algoState.stack.empty()) {
             backtrackOnce(algoState);
         }
 
-        visual_tools->deleteAllMarkers();
-        visualizeGraph(visual_tools, algoState.graph);
+//        visual_tools->deleteAllMarkers();
+//        visualizeGraph(visual_tools, algoState.graph);
 
         std::vector<moveit::core::RobotState> trajectory;
 
@@ -310,25 +271,18 @@ int main(int argc, char **argv) {
 
         } while (boost::out_degree(current, algoState.graph) > 0);
 
-        moveit_msgs::RobotTrajectory rtraj = StateVetorToTrajectory(trajectory);
+        moveit_msgs::RobotTrajectory rtraj = StateVectorToTrajectory(trajectory);
 
         tem->stopExecution();
+
+        displayMultiDoFTrajectory(visual_tools, rtraj, ps->getCurrentState());
+        visual_tools->trigger();
+
         tem->push(rtraj);
         tem->execute();
 //
         ros::Duration(5.0).sleep();
-//        ros::waitForShutdown();
     }
-
-
-
-
-
-
-//    displayMultiDoFTrajectory(visual_tools, rtraj, ps->getCurrentState());
-//    visual_tools->trigger();
-
-
 
     ROS_INFO("\\033[32m Task completed, waiting for shutdown signal.");
 
@@ -337,7 +291,7 @@ int main(int argc, char **argv) {
     return 0;
 }
 
-moveit_msgs::RobotTrajectory StateVetorToTrajectory(std::vector<moveit::core::RobotState> &trajectory) {
+moveit_msgs::RobotTrajectory StateVectorToTrajectory(std::vector<moveit::core::RobotState> &trajectory) {
     moveit_msgs::RobotTrajectory rtraj;
     rtraj.multi_dof_joint_trajectory.joint_names.push_back("world_joint");
 
@@ -472,37 +426,27 @@ sampleNearbyState(std::default_random_engine &rng,
             floating_joint_positions[6], floating_joint_positions[3],
             floating_joint_positions[4], floating_joint_positions[5]);
 
+
+    const double MAX_STEP = 0.3;
+
+    std::uniform_real_distribution<double> distance_distribution(0.0,MAX_STEP);
+
+    double forward_distance = distance_distribution(rng);
+
+    double change_factor = 1.0 - forward_distance / MAX_STEP;
+
+    std::uniform_real_distribution<double> vertical_distribution(- 0.1 * change_factor, 0.1 * change_factor);
+
+    std::uniform_real_distribution<double> angle_distribution(- 0.5 * change_factor, 0.5 * change_factor);
     auto next_rot = rot * Eigen::AngleAxisd(angles(rng), Eigen::Vector3d::UnitZ());
 
-    Eigen::Vector3d next_position = base_position + next_rot * Eigen::Vector3d(0.0, 0.1, 0.0) +
-                                    Eigen::Vector3d(0.0, 0.0, std::uniform_real_distribution<double>(-0.05, 0.05)(rng));
+    Eigen::Vector3d next_position = base_position + next_rot * Eigen::Vector3d(0.0, forward_distance, vertical_distribution(rng));
 
     moveit::core::RobotState next_state = floatingJointStateFromPositionANdRotation(node_state, next_rot,
                                                                                     next_position);
     next_state.update();
     return next_state;
 }
-
-//moveit::core::RobotState sampleToward(const moveit::core::RobotState &node_state, const Eigen::Vector3d& target) {
-//    const double *floating_joint_positions = node_state.getVariablePositions();
-//
-//    Eigen::Vector3d base_position(floating_joint_positions[0], floating_joint_positions[1],
-//                                  floating_joint_positions[2]);
-//
-//    // Note: Eigen's quaternions are [w,x,y,z], but the floating joint has [x,y,z,w]
-//    Eigen::Quaterniond rot(
-//            floating_joint_positions[6], floating_joint_positions[3],
-//            floating_joint_positions[4], floating_joint_positions[5]);
-//
-//    auto next_rot = rot * Eigen::AngleAxisd(angles(rng), Eigen::Vector3d::UnitZ());
-//
-//    Eigen::Vector3d next_position = base_position + next_rot * Eigen::Vector3d(0.0,0.1,0.0) + Eigen::Vector3d(0.0,0.0,std::uniform_real_distribution<double>(-0.05,0.05)(rng));
-//
-//    moveit::core::RobotState next_state = floatingJointStateFromPositionANdRotation(node_state, next_rot,
-//                                                                                    next_position);
-//    next_state.update();
-//    return next_state;
-//}
 
 moveit::core::RobotState
 floatingJointStateFromPositionANdRotation(const moveit::core::RobotState &node_state, Eigen::Quaterniond &next_rot,
