@@ -67,14 +67,15 @@ typedef boost::graph_traits<Graph> GraphTraits;
 typedef GraphTraits::vertex_descriptor VertexDescriptor;
 
 struct StackFrame {
-    VertexDescriptor vertex;
+    moveit::core::RobotState state;
     std::optional<Eigen::Vector3d> target;
 };
 
 struct AlgorithmState {
 
     std::vector<StackFrame> stack;
-    Graph graph;
+    std::vector<moveit::core::RobotState> best_trajectory;
+    double best_trajectory_cost;
     TargetSet remaining_targets;
 
 };
@@ -178,21 +179,16 @@ int main(int argc, char **argv) {
         const moveit::core::LinkModel *end_effector = ps->getRobotModel()->getLinkModel("end_effector");
 
         const moveit::core::RobotState start_state = ps->getCurrentState();
+
         double initialCostToGo = costToGoToNearest(algoState.remaining_targets, start_state.getGlobalLinkTransform(
                 end_effector).translation()).first / LONGEST_DISTANCE + (double) algoState.remaining_targets.size();
-
-        const VertexDescriptor start = algoState.graph.add_vertex({
-                                                                          .state = start_state,
-                                                                          .costToGo = initialCostToGo,
-                                                                          .bestCostToGo = initialCostToGo
-                                                                  });
 
         std::default_random_engine rng(ros::Time::now().toNSec());
         std::uniform_real_distribution<double> angles(-0.3, 0.3);
 
         std::uniform_real_distribution<double> zerotoOne(0.0, 1.0);
 
-        algoState.stack.push_back({start, {}});
+        algoState.stack.push_back({start_state, {}});
 
         auto planner_start = ros::Time::now();
 
@@ -216,7 +212,23 @@ int main(int argc, char **argv) {
                                                  algoState.stack.size() - 2);
 
                 for (int jump_i = 0; jump_i < backtrack_jump; jump_i++) {
-                    backtrackOnce(algoState);
+                    if (algoState.stack.back().target.has_value()) {
+                        algoState.remaining_targets.insert(algoState.stack.back().target.value());
+                    }
+
+                    VertexDescriptor currentNode1 = algoState.stack.back().vertex;
+                    VertexData &current1 = algoState.graph[currentNode1];
+
+                    current1.bestCostToGo = current1.costToGo;
+
+                    typename boost::graph_traits<Graph>::out_edge_iterator ei, eiEnd;
+
+                    for (std::tie(ei, eiEnd) = boost::out_edges(currentNode1, algoState.graph); ei != eiEnd; ++ei) {
+                        current1.bestCostToGo = std::min(current1.bestCostToGo,
+                                                         algoState.graph[ei->m_target].bestCostToGo);
+                    }
+
+                    algoState.stack.pop_back();
                 }
 
             } else {
