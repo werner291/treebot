@@ -39,6 +39,11 @@ namespace oc = ompl::control;
 
 namespace rvt = rviz_visual_tools;
 
+struct TrajectoryPoint {
+    moveit::core::RobotState state;
+    ros::Time at_time;
+};
+
 class EigenVector3dHash {
 
     std::hash<double> hash;
@@ -55,26 +60,8 @@ public:
 
 typedef std::unordered_set<Eigen::Vector3d, EigenVector3dHash> TargetSet;
 
-struct VertexData {
-    const moveit::core::RobotState state;
-    double costToGo;
-    double bestCostToGo; // We'll want something more statistical later, this is too sensitive.
-};
-
-typedef boost::directed_graph<VertexData> Graph;
-
-typedef boost::graph_traits<Graph> GraphTraits;
-typedef GraphTraits::vertex_descriptor VertexDescriptor;
-
-struct StackFrame {
-    moveit::core::RobotState state;
-    std::optional<Eigen::Vector3d> target;
-};
-
 planning_scene::PlanningScenePtr
 snapshotPlanningScene(const std::shared_ptr<planning_scene_monitor::PlanningSceneMonitor> &psm);
-
-std::shared_ptr<oc::SpaceInformation> initSpaceInformation();
 
 moveit::core::RobotState
 floatingJointStateFromPositionANdRotation(const moveit::core::RobotState &node_state, Eigen::Quaterniond &next_rot,
@@ -86,7 +73,8 @@ sampleNearbyState(std::default_random_engine &rng, std::uniform_real_distributio
 
 geometry_msgs::Transform baseLinkTransform(const moveit::core::RobotState &state);
 
-moveit_msgs::RobotTrajectory StateVectorToTrajectory(std::vector<moveit::core::RobotState> &trajectory);
+moveit_msgs::RobotTrajectory
+StateVectorToTrajectory(std::vector<TrajectoryPoint> &trajectory, const ros::Time& start_time);
 
 std::pair<double, Eigen::Vector3d>
 costToGoToNearest(const TargetSet &targets, const Eigen::Vector3d &end_effector_pos) {
@@ -118,7 +106,7 @@ std::vector<Eigen::Vector3d> pointCloudToTargets(const sensor_msgs::PointCloud2C
 }
 
 double pathQuality(const std::vector<Eigen::Vector3d> &latest_targets,
-                   const std::vector<moveit::core::RobotState> &best_trajectory) {
+                   const std::vector<TrajectoryPoint> &best_trajectory) {
 
     TargetSet remaining_targets;
 
@@ -131,8 +119,8 @@ double pathQuality(const std::vector<Eigen::Vector3d> &latest_targets,
     for (const auto &state : best_trajectory) {
         future++;
 
-        const moveit::core::LinkModel *endEffector = state.getLinkModel("end_effector");
-        auto endEffectorXform = state.getGlobalLinkTransform(endEffector);
+        const moveit::core::LinkModel *endEffector = state.state.getLinkModel("end_effector");
+        auto endEffectorXform = state.state.getGlobalLinkTransform(endEffector);
         Eigen::Vector3d endEffectorPos = endEffectorXform.translation();
 
         double targetDistance;
@@ -153,6 +141,112 @@ double pathQuality(const std::vector<Eigen::Vector3d> &latest_targets,
 
     return path_quality;
 }
+
+class PathFollower {
+    tf2_ros::Buffer& tf;
+    std::vector<TrajectoryPoint> trajectory;
+    ros::NodeHandle& nh;
+
+    std::thread background_thread;
+
+    std::mutex mutex;
+
+public:
+
+    PathFollower(ros::NodeHandle &nh, tf2_ros::Buffer &tf) : nh(nh), tf(tf) {
+
+    }
+
+    void start() {
+        background_thread = std::thread([this] { run(); });
+    }
+
+    void run() {
+
+        ros::Rate rate(ros::Duration(1.0/20.0));
+
+        auto quad_target = nh.advertise<geometry_msgs::PoseStamped>("/quad_target", 10);
+
+        geometry_msgs::PoseStamped msg;
+        msg.header.frame_id = "map";
+        msg.header.seq = 0;
+
+        while (nh.ok()) {
+
+            try {
+                geometry_msgs::TransformStamped transformStamped = tf.lookupTransform("map", "base_link", ros::Time(0));
+
+                std::lock_guard<std::mutex> lock(mutex);
+
+                ros::Time now = ros::Time::now();
+
+                size_t segment_idx = 0;
+                while (segment_idx + 1 < trajectory.size() && trajectory[segment_idx + 1].at_time < now) {
+                    segment_idx += 1;
+                }
+
+                if (segment_idx + 1 < trajectory.size()) {
+
+                    auto point_before = trajectory[segment_idx];
+                    auto point_after = trajectory[segment_idx + 1];
+
+                    double t = (now.toSec() - point_before.at_time.toSec()) /
+                               (point_after.at_time.toSec() - point_before.at_time.toSec());
+
+                    assert(0 <= t && t <= 1.0);
+
+                    auto tf_before = point_before.state.getGlobalLinkTransform("base_link");
+                    auto tf_after = point_after.state.getGlobalLinkTransform("base_link");
+
+                    msg.pose.position.x =
+                            static_cast<float>(tf_before.translation().x() * (1.0 - t) +
+                                               tf_after.translation().x() * t);
+                    msg.pose.position.y =
+                            static_cast<float>(tf_before.translation().y() * (1.0 - t) +
+                                               tf_after.translation().y() * t);
+
+                    msg.pose.position.z =
+                            static_cast<float>(tf_before.translation().z() * (1.0 - t) +
+                                               tf_after.translation().z() * t);
+
+                    auto rot_interp = Eigen::Quaterniond(tf_before.rotation()).slerp(t, Eigen::Quaterniond(tf_after.rotation()));
+
+                    msg.pose.orientation.x = static_cast<float>(rot_interp.x());
+                    msg.pose.orientation.y = static_cast<float>(rot_interp.y());
+                    msg.pose.orientation.z = static_cast<float>(rot_interp.z());
+                    msg.pose.orientation.w = static_cast<float>(rot_interp.w());
+
+                } else {
+                    msg.pose.position.x = transformStamped.transform.translation.x;
+                    msg.pose.position.y = transformStamped.transform.translation.y;
+                    msg.pose.position.z = transformStamped.transform.translation.z;
+                    msg.pose.orientation.x = transformStamped.transform.rotation.x;
+                    msg.pose.orientation.y = transformStamped.transform.rotation.y;
+                    msg.pose.orientation.z = transformStamped.transform.rotation.z;
+                    msg.pose.orientation.w = transformStamped.transform.rotation.w;
+                }
+
+                msg.header.seq += 1;
+                msg.header.stamp = ros::Time::now();
+                quad_target.publish(msg);
+            }
+            catch (tf2::TransformException &ex) {
+                ROS_WARN("%s", ex.what());
+                ros::Duration(1.0).sleep();
+                continue;
+            }
+
+            rate.sleep();
+        }
+    }
+
+    void updateTrajectory(const std::vector<TrajectoryPoint> new_trajectory) {
+        std::lock_guard<std::mutex> lock(mutex);
+
+        trajectory = new_trajectory;
+    }
+
+};
 
 int main(int argc, char **argv) {
 
@@ -196,56 +290,76 @@ int main(int argc, char **argv) {
 //    // We can't use a TrajectoryExecutionManager since it has too strong of a start/stop notion.
 //    auto current_trajectory_pub = nh.advertise<moveit_msgs::RobotTrajectory>("current_best_trajectory", 10);
 
-    auto tem = std::make_shared<trajectory_execution_manager::TrajectoryExecutionManager>(psm->getRobotModel(),
-                                                                                          psm->getStateMonitor(), true);
-    tem->setAllowedStartTolerance(0.5);
+//    auto tem = std::make_shared<trajectory_execution_manager::TrajectoryExecutionManager>(psm->getRobotModel(),
+//                                                                                          psm->getStateMonitor(), true);
+//    tem->setAllowedStartTolerance(0.5);
 
-    std::vector<moveit::core::RobotState> best_trajectory;
+    PathFollower follower(nh, *tfBuf);
+    follower.start();
+
+    // Initialize the RNG with the current time.
+    std::default_random_engine rng(ros::Time::now().toNSec());
+
+    ros::Time last_published;
+
+    ros::Time start_time = ros::Time::now();
+
+    std::vector<TrajectoryPoint> best_trajectory;
+
+    // Place current state at the start of the trajectory
+    best_trajectory.insert(best_trajectory.begin(), {
+            snapshotPlanningScene(psm)->getCurrentState(), start_time
+    });
 
     while (ros::ok()) {
 
-
         planning_scene::PlanningScenePtr ps = snapshotPlanningScene(psm);
+
+        ros::Time current_time = ros::Time::now();
 
         const moveit::core::RobotState start_state = ps->getCurrentState();
 
-        while (best_trajectory.size() >= 2 &&
-               best_trajectory[0].distance(start_state) > best_trajectory[1].distance(start_state)) {
-            best_trajectory.erase(best_trajectory.begin());
-        }
-
+        // If any states have become invalid, truncate down to that point.
         for (auto iter = best_trajectory.begin(); iter != best_trajectory.end(); ++iter) {
-            if (!ps->isStateValid(*iter)) {
+            if (!ps->isStateValid(iter->state)) {
                 ROS_INFO("Trajectory invalidated.");
-                tem->stopExecution();
                 best_trajectory.erase(iter, best_trajectory.end());
                 break;
             }
         }
 
+        // Erase any past states from current best trajectory
+        while (best_trajectory.size() >= 2 && best_trajectory[1].at_time < current_time) {
+            best_trajectory.erase(best_trajectory.begin());
+        }
 
-        std::vector<moveit::core::RobotState> stack;
-        stack.push_back(start_state);
-        stack.back().update();
 
-        std::default_random_engine rng(ros::Time::now().toNSec());
+
+        // Allocate a candidate trajectory
+        std::vector<TrajectoryPoint> candidate_trajectory;
+
+        // We branch off from the current best trajectory from a point selected uniformly at random.
+        size_t branch_point = (size_t) std::uniform_int_distribution(1, (int) best_trajectory.size())(rng);
+        // We copy the shared parts into the candidate trajectory
+        candidate_trajectory.insert(candidate_trajectory.end(), best_trajectory.begin(), best_trajectory.begin() + (long) branch_point);
+
 
         std::uniform_real_distribution<double> angles(-0.3, 0.3);
         std::uniform_real_distribution<double> zerotoOne(0.0, 1.0);
 
-        size_t branch_point = (size_t) std::uniform_int_distribution(0, (int) best_trajectory.size())(rng);
-
         for (size_t i = 0; i < branch_point; i++) {
             auto traj_pt = best_trajectory[i];
 
-            stack.push_back(traj_pt);
+            candidate_trajectory.push_back(traj_pt);
         }
 
         for (size_t i = branch_point; i < 100; i++) {
-            moveit::core::RobotState next_state = sampleNearbyState(rng, angles, stack.back());
+            moveit::core::RobotState next_state = sampleNearbyState(rng, angles, candidate_trajectory.back().state);
 
             if (ps->isStateValid(next_state)) {
-                stack.push_back(next_state);
+                double state_delta = candidate_trajectory.back().state.distance(next_state);
+                candidate_trajectory.push_back({next_state, candidate_trajectory.back().at_time + ros::Duration(
+                        state_delta * 0.2)});
             } else {
                 break;
             }
@@ -257,28 +371,28 @@ int main(int argc, char **argv) {
                 const std::lock_guard<std::mutex> lock(targets_mutex);
 
                 best_quality = pathQuality(latest_targets, best_trajectory);
-                current_quality = pathQuality(latest_targets, stack);
+                current_quality = pathQuality(latest_targets, candidate_trajectory);
             }
 
             if (current_quality > best_quality) {
 
                 ROS_INFO("New best found!");
 
-                best_trajectory = stack;
-
-                visual_tools->trigger();
-
-                moveit_msgs::RobotTrajectory rtraj = StateVectorToTrajectory(best_trajectory);
-
-                tem->stopExecution();
-                tem->push(rtraj);
-                tem->execute();
-
-                displayMultiDoFTrajectory(visual_tools, rtraj, ps->getCurrentState());
+                best_trajectory = candidate_trajectory;
             }
         }
-    }
 
+        // I'll probably want to push this into a background thread.
+        if (ros::Time::now() - last_published > ros::Duration(0.1)) {
+            follower.updateTrajectory(best_trajectory);
+
+            moveit_msgs::RobotTrajectory rtraj = StateVectorToTrajectory(best_trajectory, start_time);
+
+            displayMultiDoFTrajectory(visual_tools, rtraj, ps->getCurrentState());
+
+            last_published = ros::Time::now();
+        }
+    }
 
     ROS_INFO("\\033[32m Task completed, waiting for shutdown signal.");
 
@@ -287,112 +401,22 @@ int main(int argc, char **argv) {
     return 0;
 }
 
-moveit_msgs::RobotTrajectory StateVectorToTrajectory(std::vector<moveit::core::RobotState> &trajectory) {
+moveit_msgs::RobotTrajectory StateVectorToTrajectory(std::vector<TrajectoryPoint> &trajectory, const ros::Time& start_time) {
     moveit_msgs::RobotTrajectory rtraj;
     rtraj.multi_dof_joint_trajectory.joint_names.push_back("world_joint");
 
-    ros::Duration time_from_start(0.0);
 
     for (const auto &state: trajectory) {
-        geometry_msgs::Transform tf = baseLinkTransform(state);
+        geometry_msgs::Transform tf = baseLinkTransform(state.state);
 
         trajectory_msgs::MultiDOFJointTrajectoryPoint trajpt;
         trajpt.transforms.push_back(tf);
-        trajpt.time_from_start = time_from_start;
-        time_from_start += ros::Duration(1.0);
+        trajpt.time_from_start = state.at_time - start_time;
 
         rtraj.multi_dof_joint_trajectory.points.push_back(trajpt);
     }
     return rtraj;
 }
-//
-//VertexDescriptor getBestChild(const AlgorithmState &algoState, VertexDescriptor current) {
-//    typename boost::graph_traits<Graph>::out_edge_iterator ei, ei_end;
-//
-//    double bestCost = std::numeric_limits<double>::infinity();
-//
-//    for (std::tie(ei, ei_end) = boost::out_edges(current, algoState.graph); ei != ei_end; ++ei) {
-//        VertexDescriptor candidate = ei->m_target;
-//        double candidate_bestCost = algoState.graph[candidate].bestCostToGo;
-//
-//        if (candidate_bestCost < bestCost) {
-//            current = candidate;
-//            bestCost = candidate_bestCost;
-//        }
-//    }
-//    return current;
-//}
-//
-//void backtrackOnce(AlgorithmState &algoState) {
-//
-//    if (algoState.stack.back().target.has_value()) {
-//        algoState.remaining_targets.insert(algoState.stack.back().target.value());
-//    }
-//
-//    VertexDescriptor current_node1 = algoState.stack.back().vertex;
-//    VertexData &current = algoState.graph[current_node1];
-//
-//    current.bestCostToGo = current.costToGo;
-//
-//    typename boost::graph_traits<Graph>::out_edge_iterator ei, ei_end;
-//
-//    for (std::tie(ei, ei_end) = boost::out_edges(current_node1, algoState.graph); ei != ei_end; ++ei) {
-//        current.bestCostToGo = std::min(current.bestCostToGo, algoState.graph[ei->m_target].bestCostToGo);
-//    }
-//
-//    algoState.stack.pop_back();
-//}
-
-void visualizeGraph(std::unique_ptr<moveit_visual_tools::MoveItVisualTools> &visual_tools,
-                    const Graph &graph) {
-    double maxCost = -std::numeric_limits<double>::infinity();
-    double minCost = std::numeric_limits<double>::infinity();
-    for (auto vp = vertices(graph); vp.first != vp.second; ++vp.first) {
-        maxCost = std::max(maxCost, graph[*vp.first].bestCostToGo);
-        minCost = std::min(minCost, graph[*vp.first].bestCostToGo);
-    }
-
-    visualization_msgs::Marker marker;
-    marker.header.frame_id = "map";
-    // Set the namespace and id for this marker.  This serves to create a unique
-// ID
-    marker.ns = "Arrow";
-    // Set the marker type.
-    marker.type = visualization_msgs::Marker::ARROW;
-    // Set the marker action.  Options are ADD and DELETE
-    marker.action = visualization_msgs::Marker::ADD;
-    // Lifetime
-//        marker.lifetime = ros::Duration(1.0);
-
-    marker.header.stamp = ros::Time::now();
-
-    marker.scale.x = 0.1;
-    marker.scale.y = 0.02;
-    marker.scale.z = 0.02;
-
-    for (auto vp = vertices(graph); vp.first != vp.second; ++vp.first) {
-        auto state = graph[*vp.first];
-
-        auto tf = state.state.getGlobalLinkTransform("base_link");
-
-        marker.id++;
-        marker.color.a = 1.0;
-        double color_t = sqrt((state.bestCostToGo - minCost) / (maxCost - minCost));
-
-        if (color_t < 0.5) {
-
-            marker.color.r = static_cast<float>(color_t);
-            marker.color.g = static_cast<float>(1.0 - color_t);
-            marker.color.b = 0.0;
-            marker.pose = rvt::RvizVisualTools::convertPose(
-                    tf * Eigen::AngleAxisd(M_PI / 2, Eigen::Vector3d::UnitZ()));
-
-            visual_tools->publishMarker(marker);
-        }
-    }
-    visual_tools->trigger();
-}
-
 
 geometry_msgs::Transform baseLinkTransform(const moveit::core::RobotState &state) {
     geometry_msgs::Transform tf;
@@ -464,18 +488,3 @@ floatingJointStateFromPositionANdRotation(const moveit::core::RobotState &node_s
     next_state.setVariablePositions(next_joint_positions);
     return next_state;
 }
-
-
-std::shared_ptr<oc::SpaceInformation> initSpaceInformation() {
-    ob::RealVectorBounds bounds(3);
-    for (int d = 0; d < 3; ++d) {
-        bounds.setLow(d, d == 2 ? 0.0 : -5.0);
-        bounds.setHigh(d, 5.0);
-    }
-    auto space = std::make_shared<PositionAndHeadingSpace>(bounds);
-    auto controlspace = std::make_shared<DroneControlSpace>(space);
-    auto si(std::make_shared<oc::SpaceInformation>(space, controlspace));
-    si->setStatePropagator(std::make_shared<DronePropagator>(si.get()));
-    return si;
-}
-

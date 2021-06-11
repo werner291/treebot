@@ -45,12 +45,17 @@ if(catkin_EXPORTED_LIBRARIES)
     add_dependencies(treebot ${catkin_EXPORTED_LIBRARIES})
 endif()
 
-#########################
-# Treebot BFMT test thing #
-#########################
+##############################
+# Treebot path-follower node #
+##############################
 
-add_executable(treebot_bfmt src/ompl_bfmt_testcase.cpp)
-target_link_libraries(treebot_bfmt ${OMPL_LIBRARIES})
+add_executable(treebot_followpath src/treebot_followpath.cpp)
+set_property(TARGET treebot_followpath PROPERTY CXX_STANDARD 17)
+target_link_libraries(treebot_followpath ${catkin_LIBRARIES})
+
+if(catkin_EXPORTED_LIBRARIES)
+    add_dependencies(treebot_followpath ${catkin_EXPORTED_LIBRARIES})
+endif()
 
 #################
 # Treebot tests #
