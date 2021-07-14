@@ -2,47 +2,22 @@
 #include <geometry_msgs/PointStamped.h>
 #include <moveit/planning_scene_monitor/planning_scene_monitor.h>
 #include <moveit/planning_interface/planning_interface.h>
-#include <moveit/trajectory_execution_manager/trajectory_execution_manager.h>
 #include <moveit_msgs/DisplayTrajectory.h>
 #include <moveit_visual_tools/moveit_visual_tools.h>
 #include <moveit/robot_state/conversions.h>
 #include <tf2_ros/transform_listener.h>
-#include <ompl/base/spaces/SE3StateSpace.h>
-#include <ompl/base/OptimizationObjective.h>
-#include <ompl/base/objectives/PathLengthOptimizationObjective.h>
-#include <ompl/base/samplers/ObstacleBasedValidStateSampler.h>
-#include <ompl/control/SpaceInformation.h>
-#include <ompl/control/planners/sst/SST.h>
-#include <ompl/control/planners/pdst/PDST.h>
-#include <ompl/control/SimpleDirectedControlSampler.h>
-#include <algorithm>
-#include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/Image.h>
 #include <boost/graph/directed_graph.hpp>
 
 #include <queue>
 #include <memory>
 #include <sensor_msgs/point_cloud2_iterator.h>
 
-#include "conversions.h"
 #include "moveit_interaction.h"
-#include "state_spaces.h"
-#include "DroneControlSpace.h"
-#include "goToTarget.h"
+#include "RealtimeTrajectoryExecutor.h"
 #include <mutex>
-#include <thread>
-
-static const std::string PLANNING_GROUP = "whole_body";
-
-namespace ob = ompl::base;
-namespace og = ompl::geometric;
-namespace oc = ompl::control;
 
 namespace rvt = rviz_visual_tools;
-
-struct TrajectoryPoint {
-    moveit::core::RobotState state;
-    ros::Time at_time;
-};
 
 class EigenVector3dHash {
 
@@ -142,112 +117,6 @@ double pathQuality(const std::vector<Eigen::Vector3d> &latest_targets,
     return path_quality;
 }
 
-class PathFollower {
-    tf2_ros::Buffer& tf;
-    std::vector<TrajectoryPoint> trajectory;
-    ros::NodeHandle& nh;
-
-    std::thread background_thread;
-
-    std::mutex mutex;
-
-public:
-
-    PathFollower(ros::NodeHandle &nh, tf2_ros::Buffer &tf) : nh(nh), tf(tf) {
-
-    }
-
-    void start() {
-        background_thread = std::thread([this] { run(); });
-    }
-
-    void run() {
-
-        ros::Rate rate(ros::Duration(1.0/20.0));
-
-        auto quad_target = nh.advertise<geometry_msgs::PoseStamped>("/quad_target", 10);
-
-        geometry_msgs::PoseStamped msg;
-        msg.header.frame_id = "map";
-        msg.header.seq = 0;
-
-        while (nh.ok()) {
-
-            try {
-                geometry_msgs::TransformStamped transformStamped = tf.lookupTransform("map", "base_link", ros::Time(0));
-
-                std::lock_guard<std::mutex> lock(mutex);
-
-                ros::Time now = ros::Time::now();
-
-                size_t segment_idx = 0;
-                while (segment_idx + 1 < trajectory.size() && trajectory[segment_idx + 1].at_time < now) {
-                    segment_idx += 1;
-                }
-
-                if (segment_idx + 1 < trajectory.size()) {
-
-                    auto point_before = trajectory[segment_idx];
-                    auto point_after = trajectory[segment_idx + 1];
-
-                    double t = (now.toSec() - point_before.at_time.toSec()) /
-                               (point_after.at_time.toSec() - point_before.at_time.toSec());
-
-                    assert(0 <= t && t <= 1.0);
-
-                    auto tf_before = point_before.state.getGlobalLinkTransform("base_link");
-                    auto tf_after = point_after.state.getGlobalLinkTransform("base_link");
-
-                    msg.pose.position.x =
-                            static_cast<float>(tf_before.translation().x() * (1.0 - t) +
-                                               tf_after.translation().x() * t);
-                    msg.pose.position.y =
-                            static_cast<float>(tf_before.translation().y() * (1.0 - t) +
-                                               tf_after.translation().y() * t);
-
-                    msg.pose.position.z =
-                            static_cast<float>(tf_before.translation().z() * (1.0 - t) +
-                                               tf_after.translation().z() * t);
-
-                    auto rot_interp = Eigen::Quaterniond(tf_before.rotation()).slerp(t, Eigen::Quaterniond(tf_after.rotation()));
-
-                    msg.pose.orientation.x = static_cast<float>(rot_interp.x());
-                    msg.pose.orientation.y = static_cast<float>(rot_interp.y());
-                    msg.pose.orientation.z = static_cast<float>(rot_interp.z());
-                    msg.pose.orientation.w = static_cast<float>(rot_interp.w());
-
-                } else {
-                    msg.pose.position.x = transformStamped.transform.translation.x;
-                    msg.pose.position.y = transformStamped.transform.translation.y;
-                    msg.pose.position.z = transformStamped.transform.translation.z;
-                    msg.pose.orientation.x = transformStamped.transform.rotation.x;
-                    msg.pose.orientation.y = transformStamped.transform.rotation.y;
-                    msg.pose.orientation.z = transformStamped.transform.rotation.z;
-                    msg.pose.orientation.w = transformStamped.transform.rotation.w;
-                }
-
-                msg.header.seq += 1;
-                msg.header.stamp = ros::Time::now();
-                quad_target.publish(msg);
-            }
-            catch (tf2::TransformException &ex) {
-                ROS_WARN("%s", ex.what());
-                ros::Duration(1.0).sleep();
-                continue;
-            }
-
-            rate.sleep();
-        }
-    }
-
-    void updateTrajectory(const std::vector<TrajectoryPoint> new_trajectory) {
-        std::lock_guard<std::mutex> lock(mutex);
-
-        trajectory = new_trajectory;
-    }
-
-};
-
 int main(int argc, char **argv) {
 
     // Initialize the ROS node.
@@ -294,7 +163,7 @@ int main(int argc, char **argv) {
 //                                                                                          psm->getStateMonitor(), true);
 //    tem->setAllowedStartTolerance(0.5);
 
-    PathFollower follower(nh, *tfBuf);
+    RealtimeTrajectoryExecutor follower(nh, *tfBuf);
     follower.start();
 
     // Initialize the RNG with the current time.

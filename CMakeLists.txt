@@ -35,9 +35,17 @@ include_directories(
 # Treebot using moveit. #
 #########################
 
-set(TREEBOT_NONMAIN_SRC src/look_forward.cpp src/conversions.cpp src/moveit_interaction.cpp src/state_spaces.cpp src/FourierSeriesPlanner.cpp src/DroneControlSpace.cpp)
+set(TREEBOT_NONMAIN_SRC
+        src/look_forward.cpp
+        src/conversions.cpp
+        src/moveit_interaction.cpp
+        src/state_spaces.cpp
+        src/FourierSeriesPlanner.cpp
+        src/DroneControlSpace.cpp
+        src/RealtimeTrajectoryExecutor.h
+        src/RealtimeTrajectoryExecutor.cpp)
 
-add_executable(treebot src/treebot.cpp ${TREEBOT_NONMAIN_SRC} src/goToTarget.cpp src/goToTarget.h)
+add_executable(treebot src/treebot.cpp ${TREEBOT_NONMAIN_SRC})
 set_property(TARGET treebot PROPERTY CXX_STANDARD 17)
 target_link_libraries(treebot ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} ${OMPL_LIBRARIES})
 
@@ -65,30 +73,13 @@ add_executable (treebot_tests test/test.cpp ${TREEBOT_NONMAIN_SRC})
 target_include_directories(treebot_tests PRIVATE src)
 target_link_libraries (treebot_tests ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} ${OMPL_LIBRARIES})
 
-###########################################
-# CopelliaSim trajectory execution plugin #
-###########################################
-
-set(COPPELLIA_ROOT /home/werner/CoppeliaSim_Edu_V4_1_0_Ubuntu18_04)
-add_library(simExtTreebotController
-        src/treebot_controller.cpp
-        ${COPPELLIA_ROOT}/programming/common/simLib.cpp)
-target_include_directories(simExtTreebotController PRIVATE
-        ${COPPELLIA_ROOT}/programming/include
-        ${COPPELLIA_ROOT}/programming/simMath)
-target_link_libraries(simExtTreebotController ${catkin_LIBRARIES})
-
-if(catkin_EXPORTED_LIBRARIES)
-    add_dependencies(simExtTreebotController ${catkin_EXPORTED_LIBRARIES})
-endif()## Create the nodelet tutorial library
-
 #################################
 # Empty joint message publisher #
 #################################
 
-add_executable(dummy_joint_messages src/dummy_joint_messages.cpp)
-target_link_libraries(dummy_joint_messages ${catkin_LIBRARIES})
+add_executable(sinusoidal_occupancy src/sinusoidal_occupancy.cpp)
+target_link_libraries(sinusoidal_occupancy ${catkin_LIBRARIES})
 
 if(catkin_EXPORTED_LIBRARIES)
-    add_dependencies(dummy_joint_messages ${catkin_EXPORTED_LIBRARIES})
+    add_dependencies(sinusoidal_occupancy ${catkin_EXPORTED_LIBRARIES})
 endif()

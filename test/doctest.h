@@ -2676,7 +2676,10 @@ int registerReporter(const char* name, int priority, bool isReporter) {
 #if !defined(DOCTEST_CONFIG_DISABLE)
 
 // this is here to clear the 'current test suite' for the current translation unit - at the top
-DOCTEST_TEST_SUITE_END();
+DOCTEST_TEST_SUITE_END
+static const int RESOLUTION = 50;
+
+();
 
 // add stringification for primitive/fundamental types
 namespace doctest { namespace detail {
